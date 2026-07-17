@@ -351,6 +351,7 @@ def _base_live_config() -> dict:
             "api_key": "",
             "base_url": "",
             "temperature": 0.0,
+            "reasoning_effort": "low",
             "max_retries": 3,
         },
         "pdf": {
@@ -388,7 +389,7 @@ def openai_config():
         pytest.skip("OPENAI_API_KEY not set")
     config = _base_live_config()
     config["ai"]["provider"] = "openai"
-    config["ai"]["model"] = "gpt-5.4-mini"
+    config["ai"]["model"] = os.environ.get("OPEN_SHARED_MODEL", "gpt-5.6")
     config["ai"]["api_key"] = key
     return config
 
@@ -423,7 +424,7 @@ def ollama_config():
 
 @pytest.fixture
 def openai_vision_config(openai_config):
-    """OpenAI config with vision enabled (gpt-5.4-mini supports vision)."""
+    """OpenAI config with GPT-5.6 vision enabled."""
     config = copy.deepcopy(openai_config)
     config["pdf"]["vision"] = True
     return config

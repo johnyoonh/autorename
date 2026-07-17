@@ -71,7 +71,7 @@ def _extract_full(pdf_name: str, config: dict):
 @pytest.mark.live
 @pytest.mark.openai
 class TestOpenAI:
-    """Live extraction with OpenAI (gpt-5-mini)."""
+    """Live extraction with OpenAI through GPT-5.6 Responses."""
 
     def test_english_invoice(self, openai_config):
         md = _extract("text_invoice_acme.pdf", openai_config)

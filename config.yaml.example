@@ -4,10 +4,11 @@
 # AI Provider Configuration
 ai:
   provider: "openai"              # openai, anthropic, gemini, xai, ollama
-  model: "${OPEN_SHARED_MODEL}"  # Set OPEN_SHARED_MODEL in the user environment
+  model: "${OPEN_SHARED_MODEL}"    # For example: gpt-5.6
   api_key: "${OPENAI_API_KEY}"   # Not needed for ollama
   base_url: ""                    # Custom base URL (optional, for proxies)
-  temperature: 0.0                # 0.0 = deterministic
+  temperature: 0.0                # Used by non-OpenAI providers
+  reasoning_effort: "low"         # OpenAI Responses API: none/low/medium/high/xhigh/max
   max_retries: 2                  # Retry failed API calls
 
 # --- API Key Options ---

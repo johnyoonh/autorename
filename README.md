@@ -109,7 +109,7 @@ PaddleOCR runs locally for free, cloud AI handles smart extraction. Great for mi
 ```yaml
 ai:
   provider: "openai"           # or anthropic, gemini, xai
-  model: "gpt-5.4"
+  model: "${OPEN_SHARED_MODEL}"
   api_key: "your-api-key"
 pdf:
   ocr: true                    # PaddleOCR enhances scanned docs
@@ -154,7 +154,7 @@ pdf:
 
 | Provider | Flagship Model | Budget Model |
 |----------|---------------|-------------|
-| OpenAI | `gpt-5.4` | `gpt-5-mini` |
+| OpenAI | Set with `OPEN_SHARED_MODEL` (for example, `gpt-5.6`) | — |
 | Anthropic | `claude-sonnet-4-6` | `claude-haiku-4-5-20251001` |
 | Gemini | `gemini-3.1-flash-lite` | `gemini-3-flash-preview` |
 | xAI | `grok-4.20-beta-0309-non-reasoning` | — |
@@ -470,11 +470,12 @@ Functional Python (no classes). Modules prefixed with `_` are internal:
 
 ## AI Providers (Technical)
 
-All providers use [instructor](https://github.com/jxnl/instructor) for structured Pydantic output.
+OpenAI uses native Responses API Pydantic parsing. Compatible providers use
+[instructor](https://github.com/jxnl/instructor) for structured output.
 
 | Provider | SDK | Notes |
 |----------|-----|-------|
-| `openai` | openai (native) | Default |
+| `openai` | openai (native) | Responses API + native Pydantic structured outputs |
 | `anthropic` | anthropic (native) | Uses `instructor.from_anthropic()` — Anthropic's OpenAI compat layer ignores structured output |
 | `gemini` | openai (base_url) | Google's OpenAI-compatible endpoint |
 | `xai` | openai (base_url) | Grok models |

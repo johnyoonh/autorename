@@ -569,6 +569,23 @@ class TestValidateConfig:
         assert len(issues) == 1
         assert issues[0]["level"] == "warning"
 
+    def test_invalid_openai_reasoning_effort(self):
+        config = {
+            "ai": {
+                "provider": "openai",
+                "api_key": "key",
+                "model": "gpt-5.6",
+                "reasoning_effort": "minimal",
+            },
+            "company": {"name": "X"},
+        }
+        result = _validate_config(config, "config.yaml")
+        assert result["valid"] is False
+        assert any(
+            issue["field"] == "ai.reasoning_effort"
+            for issue in result["issues"]
+        )
+
     def test_default_company_name_warning(self):
         config = {"ai": {"provider": "openai", "api_key": "key", "model": "m"},
                   "company": {"name": "Your Company Name"}}

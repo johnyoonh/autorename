@@ -33,10 +33,11 @@ DEFAULTS = {
     "config_version": 2,
     "ai": {
         "provider": "openai",
-        "model": "gpt-5.4",
+        "model": "gpt-5.6",
         "api_key": "",
         "base_url": "",
         "temperature": 0.0,
+        "reasoning_effort": "low",
         "max_retries": 2,
     },
     "pdf": {

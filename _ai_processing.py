@@ -1,6 +1,7 @@
-"""
-AI content processing with multi-provider support via instructor.
-Supports OpenAI, Anthropic (native), Gemini, xAI, and Ollama.
+"""AI content processing for OpenAI and compatible providers.
+
+OpenAI uses the Responses API with native Pydantic structured outputs. Other
+providers retain their existing instructor-backed Chat Completions adapters.
 """
 from __future__ import annotations
 
@@ -37,11 +38,13 @@ class DocumentMetadata(BaseModel):
     )
 
 
-def get_instructor_client(config: dict):
-    """Create an instructor-wrapped client for structured LLM output.
+def get_ai_client(config: dict):
+    """Create the provider client used for structured LLM output.
 
-    Most providers route through the OpenAI SDK via compatible endpoints.
-    Anthropic uses its native SDK (their OpenAI compat ignores structured output).
+    OpenAI uses its native Responses API. Gemini, xAI, and Ollama route through
+    OpenAI-compatible Chat Completions endpoints wrapped by instructor.
+    Anthropic uses its native SDK because its OpenAI compatibility layer ignores
+    structured output.
     """
     provider = config["ai"]["provider"]
     api_key = config["ai"].get("api_key", "")
@@ -64,7 +67,14 @@ def get_instructor_client(config: dict):
     if provider == "ollama":
         api_key = api_key or "ollama"
 
-    raw = OpenAI(api_key=api_key, base_url=base_url)
+    raw = OpenAI(
+        api_key=api_key,
+        base_url=base_url,
+        max_retries=config["ai"].get("max_retries", 2),
+    )
+    if provider == "openai":
+        return raw
+
     # Ollama: use JSON mode for broadest model compatibility (TOOLS requires function calling support)
     mode = instructor.Mode.JSON if provider == "ollama" else instructor.Mode.TOOLS
     return instructor.from_openai(raw, mode=mode)
@@ -136,16 +146,80 @@ def build_image_content(images: list, provider: str) -> list[dict]:
                 "source": {"type": "base64", "media_type": "image/png", "data": b64},
             })
         return result
+    if provider == "openai":
+        return [
+            {
+                "type": "input_image",
+                "image_url": pil_to_base64_data_uri(img),
+                # Preserve the previous standard-fidelity behavior and avoid
+                # GPT-5.6's more expensive default original-detail processing.
+                "detail": "high",
+            }
+            for img in images
+        ]
     return [
         {"type": "image_url", "image_url": {"url": pil_to_base64_data_uri(img)}}
         for img in images
     ]
 
 
+def _extract_openai_metadata(
+    client: OpenAI, config: dict, content: str | list[dict]
+) -> DocumentMetadata:
+    """Extract metadata through OpenAI's Responses API structured-output helper."""
+    model = config["ai"]["model"]
+    kwargs = {
+        "model": model,
+        "instructions": build_system_prompt(config),
+        "input": [{"role": "user", "content": content}],
+        "text_format": DocumentMetadata,
+        "store": False,
+    }
+    if model.startswith(("gpt-5", "o")):
+        kwargs["reasoning"] = {
+            "effort": config["ai"].get("reasoning_effort", "low")
+        }
+    else:
+        # Preserve deterministic sampling for older non-reasoning models.
+        kwargs["temperature"] = config["ai"].get("temperature", 0.0)
+
+    response = client.responses.parse(
+        **kwargs,
+    )
+
+    if response.output_parsed is not None:
+        return response.output_parsed
+
+    refusals = [
+        item.refusal
+        for output in response.output
+        if output.type == "message"
+        for item in output.content
+        if item.type == "refusal"
+    ]
+    if refusals:
+        raise ValueError(
+            f"OpenAI refused document metadata extraction: {'; '.join(refusals)}"
+        )
+    raise ValueError("OpenAI response did not contain parsed document metadata")
+
+
 def extract_metadata_from_text(text: str, config: dict) -> DocumentMetadata:
     """Extract document metadata from text using an LLM."""
-    client = get_instructor_client(config)
+    client = get_ai_client(config)
     provider = config["ai"]["provider"]
+
+    if provider == "openai":
+        return _extract_openai_metadata(
+            client,
+            config,
+            [
+                {
+                    "type": "input_text",
+                    "text": f"Extract the information from this text:\n\n{text}",
+                }
+            ],
+        )
 
     kwargs = {
         "model": config["ai"]["model"],
@@ -167,10 +241,23 @@ def extract_metadata_from_text(text: str, config: dict) -> DocumentMetadata:
 
 def extract_metadata_from_images(images: list, config: dict) -> DocumentMetadata:
     """Extract document metadata from page images using a vision-capable LLM."""
-    client = get_instructor_client(config)
+    client = get_ai_client(config)
     provider = config["ai"]["provider"]
 
     image_content = build_image_content(images, provider)
+
+    if provider == "openai":
+        return _extract_openai_metadata(
+            client,
+            config,
+            [
+                {
+                    "type": "input_text",
+                    "text": "Extract document metadata from these page images:",
+                },
+                *image_content,
+            ],
+        )
 
     kwargs = {
         "model": config["ai"]["model"],
@@ -208,10 +295,23 @@ def extract_metadata_from_text_and_images(
     text: str, images: list, config: dict
 ) -> DocumentMetadata:
     """Extract metadata from combined text + page images (multimodal)."""
-    client = get_instructor_client(config)
+    client = get_ai_client(config)
     provider = config["ai"]["provider"]
 
     image_content = build_image_content(images, provider)
+
+    if provider == "openai":
+        return _extract_openai_metadata(
+            client,
+            config,
+            [
+                {
+                    "type": "input_text",
+                    "text": f"Extract document metadata from this text and images:\n\n{text}",
+                },
+                *image_content,
+            ],
+        )
 
     kwargs = {
         "model": config["ai"]["model"],

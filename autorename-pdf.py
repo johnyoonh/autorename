@@ -687,6 +687,17 @@ def _validate_config(config: dict | None, config_path: str) -> dict:
             "message": "No model specified, will use provider default",
         })
 
+    reasoning_effort = ai.get("reasoning_effort", "low")
+    valid_efforts = {"none", "low", "medium", "high", "xhigh", "max"}
+    if provider == "openai" and reasoning_effort not in valid_efforts:
+        issues.append({
+            "field": "ai.reasoning_effort",
+            "level": "error",
+            "message": (
+                "Must be one of: none, low, medium, high, xhigh, max"
+            ),
+        })
+
     company_name = config.get("company", {}).get("name", "")
     if not company_name or company_name == "Your Company Name":
         issues.append({

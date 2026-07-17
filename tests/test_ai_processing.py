@@ -3,6 +3,7 @@
 import os
 import sys
 import pytest
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 from PIL import Image
 
@@ -12,7 +13,7 @@ from _ai_processing import (
     DocumentMetadata,
     build_system_prompt,
     pil_to_base64_data_uri,
-    get_instructor_client,
+    get_ai_client,
     extract_metadata,
     _build_combined_text,
 )
@@ -86,32 +87,33 @@ class TestPilToBase64DataUri:
         assert len(base64_part) > 0
 
 
-class TestGetInstructorClient:
+class TestGetAiClient:
     def test_unknown_provider_raises(self, sample_config):
         sample_config["ai"]["provider"] = "unknown_provider"
         with pytest.raises(ValueError, match="Unknown provider"):
-            get_instructor_client(sample_config)
+            get_ai_client(sample_config)
 
     def test_missing_api_key_raises(self, sample_config):
         sample_config["ai"]["api_key"] = ""
         with pytest.raises(ValueError, match="API key required"):
-            get_instructor_client(sample_config)
+            get_ai_client(sample_config)
 
     def test_ollama_no_api_key_ok(self, sample_config):
         sample_config["ai"]["provider"] = "ollama"
         sample_config["ai"]["api_key"] = ""
         # Should not raise — ollama doesn't need an API key
-        client = get_instructor_client(sample_config)
+        client = get_ai_client(sample_config)
         assert client is not None
 
     @patch("_ai_processing.OpenAI")
     @patch("_ai_processing.instructor")
     def test_openai_client(self, mock_instructor, mock_openai, sample_config):
-        mock_instructor.from_openai.return_value = MagicMock()
-        mock_instructor.Mode.TOOLS = "TOOLS"
-        client = get_instructor_client(sample_config)
-        mock_openai.assert_called_once_with(api_key="test-key-123", base_url=None)
-        mock_instructor.from_openai.assert_called_once_with(mock_openai.return_value, mode="TOOLS")
+        client = get_ai_client(sample_config)
+        mock_openai.assert_called_once_with(
+            api_key="test-key-123", base_url=None, max_retries=2
+        )
+        assert client is mock_openai.return_value
+        mock_instructor.from_openai.assert_not_called()
 
     @patch("_ai_processing.OpenAI")
     @patch("_ai_processing.instructor")
@@ -121,7 +123,7 @@ class TestGetInstructorClient:
         mock_instructor.Mode.JSON = "JSON"
         sample_config["ai"]["provider"] = "ollama"
         sample_config["ai"]["api_key"] = ""
-        get_instructor_client(sample_config)
+        get_ai_client(sample_config)
         mock_instructor.from_openai.assert_called_once_with(mock_openai.return_value, mode="JSON")
 
     @patch("_ai_processing.OpenAI")
@@ -129,7 +131,7 @@ class TestGetInstructorClient:
     def test_gemini_client_uses_base_url(self, mock_instructor, mock_openai, sample_config):
         mock_instructor.from_openai.return_value = MagicMock()
         sample_config["ai"]["provider"] = "gemini"
-        get_instructor_client(sample_config)
+        get_ai_client(sample_config)
         call_args = mock_openai.call_args
         assert "generativelanguage.googleapis.com" in call_args.kwargs["base_url"]
 
@@ -137,7 +139,7 @@ class TestGetInstructorClient:
 class TestExtractMetadataProviderKwargs:
     """Test that provider-specific kwargs are applied correctly."""
 
-    @patch("_ai_processing.get_instructor_client")
+    @patch("_ai_processing.get_ai_client")
     @patch("_ai_processing.build_system_prompt", return_value="test prompt")
     def test_anthropic_adds_max_tokens(self, mock_prompt, mock_client, sample_config):
         """Anthropic provider includes max_tokens in API call."""
@@ -154,45 +156,104 @@ class TestExtractMetadataProviderKwargs:
         call_kwargs = mock_completions.create.call_args[1]
         assert call_kwargs.get("max_tokens") == 1024
 
-    @patch("_ai_processing.get_instructor_client")
+    @patch("_ai_processing.get_ai_client")
     @patch("_ai_processing.build_system_prompt", return_value="test prompt")
-    def test_openai_no_max_tokens(self, mock_prompt, mock_client, sample_config):
-        """OpenAI provider does NOT include max_tokens."""
-        mock_completions = MagicMock()
-        mock_completions.create.return_value = DocumentMetadata(
+    def test_openai_uses_responses_structured_output(
+        self, mock_prompt, mock_client, sample_config
+    ):
+        """OpenAI uses Responses parsing without Chat Completions parameters."""
+        response = MagicMock()
+        response.output_parsed = DocumentMetadata(
             company_name="Test", document_date="01.01.2024", document_type="ER"
         )
-        mock_client.return_value = MagicMock(chat=MagicMock(completions=mock_completions))
+        response.output = []
+        mock_client.return_value.responses.parse.return_value = response
 
         from _ai_processing import extract_metadata_from_text
         extract_metadata_from_text("test text", sample_config)
 
-        call_kwargs = mock_completions.create.call_args[1]
-        assert "max_tokens" not in call_kwargs
+        call_kwargs = mock_client.return_value.responses.parse.call_args.kwargs
+        assert call_kwargs["model"] == sample_config["ai"]["model"]
+        assert call_kwargs["text_format"] is DocumentMetadata
+        assert call_kwargs["reasoning"] == {"effort": "low"}
+        assert call_kwargs["store"] is False
+        assert "temperature" not in call_kwargs
+        assert "messages" not in call_kwargs
 
-    @patch("_ai_processing.get_instructor_client")
+    @patch("_ai_processing.get_ai_client")
     @patch("_ai_processing.build_system_prompt", return_value="test prompt")
     def test_vision_extraction_kwargs(self, mock_prompt, mock_client, sample_config):
         """Vision extraction sends image_url content blocks."""
         from PIL import Image
-        mock_completions = MagicMock()
-        mock_completions.create.return_value = DocumentMetadata(
+        response = MagicMock()
+        response.output_parsed = DocumentMetadata(
             company_name="Test", document_date="01.01.2024", document_type="ER"
         )
-        mock_client.return_value = MagicMock(chat=MagicMock(completions=mock_completions))
+        response.output = []
+        mock_client.return_value.responses.parse.return_value = response
 
         from _ai_processing import extract_metadata_from_images
         images = [Image.new("RGB", (100, 100))]
         extract_metadata_from_images(images, sample_config)
 
-        call_kwargs = mock_completions.create.call_args[1]
-        messages = call_kwargs["messages"]
-        user_msg = messages[1]
+        call_kwargs = mock_client.return_value.responses.parse.call_args.kwargs
+        user_msg = call_kwargs["input"][0]
         assert user_msg["role"] == "user"
-        # Content should be a list with text + image_url blocks
         assert isinstance(user_msg["content"], list)
-        image_blocks = [c for c in user_msg["content"] if c.get("type") == "image_url"]
+        image_blocks = [
+            c for c in user_msg["content"] if c.get("type") == "input_image"
+        ]
         assert len(image_blocks) == 1
+        assert image_blocks[0]["detail"] == "high"
+
+    @patch("_ai_processing.build_system_prompt", return_value="test prompt")
+    def test_openai_refusal_is_reported(self, mock_prompt, sample_config):
+        """Responses refusals become an actionable extraction error."""
+        from _ai_processing import _extract_openai_metadata
+
+        refusal = SimpleNamespace(type="refusal", refusal="Cannot process document")
+        message = SimpleNamespace(type="message", content=[refusal])
+        response = SimpleNamespace(output_parsed=None, output=[message])
+        client = MagicMock()
+        client.responses.parse.return_value = response
+
+        with pytest.raises(ValueError, match="OpenAI refused.*Cannot process document"):
+            _extract_openai_metadata(client, sample_config, "test input")
+
+    @patch("_ai_processing.build_system_prompt", return_value="test prompt")
+    def test_openai_missing_parsed_output_is_reported(self, mock_prompt, sample_config):
+        """A completed response without parsed metadata fails clearly."""
+        from _ai_processing import _extract_openai_metadata
+
+        response = SimpleNamespace(output_parsed=None, output=[])
+        client = MagicMock()
+        client.responses.parse.return_value = response
+
+        with pytest.raises(ValueError, match="did not contain parsed"):
+            _extract_openai_metadata(client, sample_config, "test input")
+
+    @patch("_ai_processing.build_system_prompt", return_value="test prompt")
+    def test_older_openai_model_uses_temperature(self, mock_prompt, sample_config):
+        """Non-reasoning OpenAI models retain deterministic sampling."""
+        from _ai_processing import _extract_openai_metadata
+
+        sample_config["ai"]["model"] = "gpt-4o-mini"
+        response = SimpleNamespace(
+            output_parsed=DocumentMetadata(
+                company_name="Test",
+                document_date="01.01.2024",
+                document_type="ER",
+            ),
+            output=[],
+        )
+        client = MagicMock()
+        client.responses.parse.return_value = response
+
+        _extract_openai_metadata(client, sample_config, "test input")
+
+        call_kwargs = client.responses.parse.call_args.kwargs
+        assert call_kwargs["temperature"] == 0.0
+        assert "reasoning" not in call_kwargs
 
 
 class TestBuildCombinedText:
