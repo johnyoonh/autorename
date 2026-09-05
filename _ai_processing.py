@@ -106,6 +106,12 @@ def build_system_prompt(config: dict) -> str:
         f"For incoming invoices (invoices my company receives) use the term '{er}' only, nothing more. "
         f"For outgoing invoices (invoices my company sends) use the term '{ar}', nothing more. "
         f"For all other document types, always find a short descriptive summary/subject in {lang} language.\n\n"
+        "For screenshots or standalone images, infer the document_type from visible UI text, "
+        "browser tabs, page titles, headings, app names, URLs, chat titles, diagram labels, "
+        "and prominent content. Prefer a concise subject such as 'GenOS Plugin Test Page', "
+        "'ChatGPT Conversation', or 'Anthropic Prompting Slide'. Avoid generic values like "
+        "'Screenshot', 'Image', or 'General Screenshot' when any visible text indicates a "
+        "more specific topic.\n\n"
         "If a value is not found, leave it empty."
     )
 

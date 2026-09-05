@@ -32,6 +32,7 @@ _handle_rename = _mod._handle_rename
 _handle_undo = _mod._handle_undo
 _main = _mod.main
 get_base_directory = _mod.get_base_directory
+collect_pdf_files = _mod.collect_pdf_files
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from conftest import assert_batch_result_schema, assert_error_result_schema, assert_undo_result_schema, assert_batch_list_schema
@@ -56,6 +57,13 @@ class TestBuildParser:
         args = parser.parse_args(["rename", "a.pdf", "b.pdf"])
         assert args.subcommand == "rename"
         assert args.paths == ["a.pdf", "b.pdf"]
+
+    def test_rename_image_path(self):
+        parser = build_parser()
+        args = parser.parse_args(["rename", "receipt.png", "--dry-run"])
+        assert args.subcommand == "rename"
+        assert args.paths == ["receipt.png"]
+        assert args.dry_run is True
 
     def test_rename_recursive(self):
         parser = build_parser()
@@ -160,6 +168,28 @@ class TestBuildParser:
 # ---------------------------------------------------------------------------
 # 2. argv preprocessing
 # ---------------------------------------------------------------------------
+
+
+class TestCollectFiles:
+    def test_collects_pdf_and_image_files(self, tmp_path):
+        pdf = tmp_path / "invoice.pdf"
+        png = tmp_path / "receipt.png"
+        txt = tmp_path / "notes.txt"
+        pdf.write_text("pdf")
+        png.write_bytes(b"image")
+        txt.write_text("notes")
+
+        result = sorted(os.path.basename(p) for p in collect_pdf_files([str(tmp_path)]))
+        assert result == ["invoice.pdf", "receipt.png"]
+
+    def test_collects_images_recursively(self, tmp_path):
+        nested = tmp_path / "nested"
+        nested.mkdir()
+        jpg = nested / "receipt.jpg"
+        jpg.write_bytes(b"image")
+
+        result = collect_pdf_files([str(tmp_path)], recursive=True)
+        assert result == [str(jpg)]
 
 class TestPreprocessArgv:
     """Test _preprocess_argv injects 'rename' subcommand when needed."""
@@ -926,6 +956,30 @@ class TestHandleRename:
         assert config_used["ai"]["model"] == "claude-sonnet-4-6"
         assert config_used["pdf"]["vision"] is True
         assert config_used["pdf"]["ocr"] is True
+
+    @patch("autorename_pdf.process_pdf")
+    @patch("autorename_pdf.collect_pdf_files", return_value=["/tmp/test.png"])
+    @patch("autorename_pdf.load_yaml_config")
+    @patch("autorename_pdf.get_base_directory", return_value="/fake")
+    def test_text_only_leaves_image_llm_vision_config_unchanged(self, mock_bd, mock_load, mock_collect, mock_proc, capsys, sample_config):
+        sample_config.setdefault("image", {})["llm_vision"] = True
+        mock_load.return_value = sample_config
+        mock_proc.return_value = FileResult(
+            file="/tmp/test.png", status="skipped",
+            provider="openai", model="gpt-5.4-mini",
+        )
+
+        args = argparse.Namespace(
+            config_path=None, paths=["/tmp/test.png"], dry_run=True,
+            recursive=False, quiet=False, output="json",
+            provider=None, model=None, vision=False, text_only=True, ocr=False,
+        )
+        with pytest.raises(SystemExit):
+            _handle_rename(args, "json")
+
+        config_used = mock_proc.call_args[0][1]
+        assert config_used["pdf"]["vision"] is False
+        assert config_used["image"]["llm_vision"] is True
 
 
 class TestHandleUndo:

@@ -1,12 +1,14 @@
 """
-PDF processing utilities for text extraction, image rendering, and OCR.
-Uses pdfplumber for text, pypdfium2 for page images, PaddleOCR via subprocess.
+Document processing utilities for text extraction, image rendering, and OCR.
+Uses pdfplumber for PDF text, pypdfium2 for page images, PaddleOCR via subprocess,
+and Apple Vision for standalone image files when available.
 """
 from __future__ import annotations
 
 import os
 import json
 import logging
+import re
 import subprocess
 import sys
 import tempfile
@@ -18,10 +20,17 @@ import pdfplumber
 import pypdfium2 as pdfium
 from PIL import Image
 
+from _apple_vision import analyze_image_with_apple_vision
+
+
+IMAGE_EXTENSIONS = {
+    ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".gif", ".webp", ".heic", ".heif"
+}
+
 
 @dataclass
 class ExtractionResult:
-    """Result of PDF content extraction."""
+    """Result of document content extraction."""
     text: str = ""                                  # pdfplumber text (always)
     ocr_text: str = ""                              # PaddleOCR text (if run)
     images: list = field(default_factory=list)      # page images (if vision)
@@ -29,6 +38,34 @@ class ExtractionResult:
     page_count: int = 0
     sources: list = field(default_factory=list)     # e.g. ["text"], ["text","ocr"], ["text","vision"]
     warnings: list = field(default_factory=list)    # non-fatal issues (OCR failures, etc.)
+
+
+def is_image_file(path: str) -> bool:
+    return os.path.splitext(path)[1].lower() in IMAGE_EXTENSIONS
+
+
+def _looks_like_screenshot(path: str) -> bool:
+    name = os.path.basename(path).lower()
+    return bool(re.search(r"(?:^|[_ -])(?:screenshot|screen shot|screen-shot)(?:[_ -]|$)", name))
+
+
+def _screenshot_mode_enabled(image_path: str, config: dict) -> bool:
+    setting = config.get("image", {}).get("screenshot_mode", "auto")
+    if isinstance(setting, str):
+        setting = setting.lower()
+    if setting == "auto":
+        return _looks_like_screenshot(image_path)
+    return bool(setting)
+
+
+def load_image(path: str) -> Image.Image | None:
+    """Load a standalone image as RGB for multimodal providers."""
+    try:
+        with Image.open(path) as img:
+            return img.convert("RGB")
+    except Exception as e:
+        logging.warning(f"Could not load image for LLM vision: {path}: {e}")
+        return None
 
 
 _MOJIBAKE_MARKERS = (
@@ -350,8 +387,90 @@ def _should_run_step(setting, quality: float, threshold: float) -> bool:
     return quality < threshold
 
 
+def _format_image_hints(vision_result) -> str:
+    parts = []
+    if vision_result.classifications:
+        labels = ", ".join(
+            f"{label} ({confidence:.2f})"
+            for label, confidence in vision_result.classifications
+        )
+        parts.append(f"Apple Vision classifications: {labels}")
+    if vision_result.coreml_observations:
+        observations = []
+        for label, confidence in vision_result.coreml_observations:
+            if confidence is None:
+                observations.append(label)
+            else:
+                observations.append(f"{label} ({confidence:.2f})")
+        parts.append(f"VNCoreMLRequest observations: {', '.join(observations)}")
+    return "\n".join(parts)
+
+
+def extract_image_content(image_path: str, config: dict) -> ExtractionResult:
+    """Extract content from a standalone image file for metadata renaming."""
+    image_cfg = config.get("image", {})
+    pdf_cfg = config.get("pdf", {})
+    vision_setting = image_cfg.get("llm_vision", pdf_cfg.get("vision", False))
+    apple_vision_enabled = image_cfg.get("apple_vision", True)
+    screenshot_mode = _screenshot_mode_enabled(image_path, config)
+
+    sources = []
+    warnings = []
+    text_parts = []
+    images = []
+
+    if screenshot_mode:
+        text_parts.append("--- Screenshot Context ---")
+        text_parts.append(
+            "This standalone image appears to be a UI screenshot. "
+            "Use visible UI text, browser tabs, app names, URLs, headings, "
+            "chat titles, and diagram labels to infer a concise subject. "
+            f"Source filename: {os.path.basename(image_path)}"
+        )
+        sources.append("screenshot_context")
+
+    if apple_vision_enabled:
+        vision_result = analyze_image_with_apple_vision(image_path, config)
+        warnings.extend(vision_result.warnings)
+        if vision_result.text.strip():
+            text_parts.append("--- Apple Vision OCR Text ---")
+            text_parts.append(vision_result.text)
+            sources.append("apple_vision_ocr")
+        hints = _format_image_hints(vision_result)
+        if hints:
+            text_parts.append("--- Apple Vision Image Hints ---")
+            text_parts.append(hints)
+            sources.append("apple_vision_classification")
+
+    if _should_run_step(vision_setting, 0.0, 1.0):
+        image = load_image(image_path)
+        if image is not None:
+            images.append(image)
+            sources.append("vision")
+        else:
+            warnings.append("Could not load image for LLM vision")
+
+    text = "\n".join(text_parts).strip()
+    quality = assess_text_quality(text)
+    if not sources:
+        sources.append("image")
+
+    return ExtractionResult(
+        text=text,
+        ocr_text="",
+        images=images,
+        quality_score=quality,
+        page_count=1,
+        sources=sources,
+        warnings=warnings,
+    )
+
+
 def extract_content(pdf_path: str, config: dict) -> ExtractionResult:
     """Main extraction entry point. Text always runs; OCR and vision are independent add-ons."""
+    if is_image_file(pdf_path):
+        return extract_image_content(pdf_path, config)
+
     pdf_cfg = config.get("pdf", {})
     max_pages = pdf_cfg.get("max_pages", 3)
     threshold = pdf_cfg.get("text_quality_threshold", 0.3)

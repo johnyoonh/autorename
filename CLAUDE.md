@@ -1,6 +1,6 @@
 # AutoRename-PDF
 
-PDF auto-renamer using AI + OCR. Extracts company name, date, and document type from PDFs, renames to `YYYYMMDD COMPANY DOCTYPE.pdf`.
+PDF/image auto-renamer using AI + OCR. Extracts company name, date, and document type from PDFs or standalone images, renames to `YYYYMMDD COMPANY DOCTYPE.ext`.
 
 ## Development Setup
 
@@ -45,7 +45,8 @@ Functional Python (no classes). Modules prefixed with `_` are internal:
 |--------|---------|
 | `autorename-pdf.py` | Entry point, CLI (argparse), orchestration |
 | `_ai_processing.py` | Multi-provider AI via instructor, structured output (Pydantic) |
-| `_pdf_utils.py` | Text extraction (pdfplumber), image rendering (pypdfium2), PaddleOCR bridge |
+| `_pdf_utils.py` | Text extraction (pdfplumber), image rendering (pypdfium2), PaddleOCR bridge, standalone image extraction |
+| `_apple_vision.py` | Optional macOS Apple Vision OCR/classification and VNCoreMLRequest hints |
 | `_paddleocr_bridge.py` | Subprocess bridge script for PaddleOCR venv |
 | `_document_processing.py` | Company harmonization (rapidfuzz), renaming, undo log |
 | `_config_loader.py` | YAML v2 config loading, schema validation, defaults |
@@ -60,7 +61,7 @@ Functional Python (no classes). Modules prefixed with `_` are internal:
 - Python 3.11+, type hints encouraged
 - Company name matching uses Jaro-Winkler similarity (rapidfuzz library)
 - Date parsing uses dateparser with DMY locale
-- OCR: PaddleOCR via isolated subprocess venv (optional, installed by setup.ps1)
+- OCR: PaddleOCR via isolated subprocess venv (optional, installed by setup.ps1); Apple Vision for standalone images on macOS when PyObjC is installed
 
 ## AI Providers
 
@@ -81,6 +82,7 @@ All providers use `instructor` for structured Pydantic output. Anthropic uses na
 1. **Tier 1**: pdfplumber text extraction (free, instant)
 2. **Tier 2a**: PaddleOCR via subprocess (free, ~2-5s/page, if installed)
 3. **Tier 2b**: Vision mode — page images sent to LLM (~$0.0001/page)
+4. **Image files**: Apple Vision OCR/classification locally on macOS, optional VNCoreMLRequest model hints, optional LLM vision pixels
 
 Controlled by `pdf.ocr` (false/true/"auto") and `pdf.vision` (false/true/"auto").
 

@@ -114,6 +114,7 @@ class TestLoadYamlConfig:
         assert result is None
 
     def test_paddleocr_path_autodetect(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "win32")
         monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
         config = {"config_version": 2, "ai": {"provider": "openai", "api_key": "test"}}
         path = str(tmp_path / "config.yaml")

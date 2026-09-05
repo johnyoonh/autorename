@@ -53,6 +53,12 @@ class TestBuildSystemPrompt:
         prompt = build_system_prompt(sample_config)
         assert "English" in prompt
 
+    def test_contains_screenshot_guidance(self, sample_config):
+        prompt = build_system_prompt(sample_config)
+        assert "screenshots or standalone images" in prompt
+        assert "visible UI text" in prompt
+        assert "Avoid generic values" in prompt
+
     def test_custom_invoice_codes(self, sample_config):
         sample_config["pdf"]["incoming_invoice"] = "EIN"
         sample_config["pdf"]["outgoing_invoice"] = "AUS"

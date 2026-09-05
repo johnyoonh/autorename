@@ -47,6 +47,19 @@ DEFAULTS = {
         "outgoing_invoice": "AR",
         "incoming_invoice": "ER",
     },
+    "image": {
+        "apple_vision": True,
+        "apple_vision_recognition_level": "accurate",
+        "apple_vision_language_correction": True,
+        "apple_vision_languages": ["en-US"],
+        "apple_vision_classify": True,
+        "apple_vision_max_classifications": 8,
+        "apple_vision_min_confidence": 0.15,
+        "llm_vision": False,
+        "screenshot_mode": "auto",
+        "coreml_model_path": "",
+        "coreml_max_observations": 10,
+    },
     "paddleocr": {
         "venv_path": "",
         "language": "en",
@@ -61,6 +74,10 @@ DEFAULTS = {
     "output": {
         "language": "English",
         "date_format": "%Y%m%d",
+        "use_source_timestamp_fallback": True,
+        "preserve_source_timestamp_for_images": True,
+        "omit_unknown_components": True,
+        "skip_when_no_substantial_description": True,
     },
     "prompt_extension": "",
 }

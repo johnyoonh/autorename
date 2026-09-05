@@ -170,6 +170,15 @@ See `config.yaml.example` for full documentation of all settings.
 | `pdf.vision` | `false` / `true` / `"auto"` | Send page images to LLM |
 | `pdf.text_quality_threshold` | `0.0` – `1.0` | Triggers OCR/vision in `"auto"` mode (default: `0.3`) |
 | `pdf.max_pages` | integer | Max pages to process per PDF (default: `3`) |
+| `image.apple_vision` | `false` / `true` | OCR standalone image files locally with Apple Vision on macOS |
+| `image.apple_vision_classify` | `false` / `true` | Add built-in Vision image classification labels as metadata hints |
+| `image.coreml_model_path` | path | Optional `.mlmodelc` model used through `VNCoreMLRequest` |
+| `image.llm_vision` | `false` / `true` / `"auto"` | Also send standalone image pixels to the configured LLM |
+| `image.screenshot_mode` | `false` / `true` / `"auto"` | Add screenshot-specific context for UI screenshots so visible text, tabs, URLs, and headings are prioritized |
+| `output.use_source_timestamp_fallback` | `false` / `true` | Use a timestamp already present in the source filename when AI finds no document date |
+| `output.preserve_source_timestamp_for_images` | `false` / `true` | Convert screenshot-style timestamps to compact prefixes such as `20240102_142144` for image filenames |
+| `output.omit_unknown_components` | `false` / `true` | Omit weak values like `Unknown` instead of writing them into filenames |
+| `output.skip_when_no_substantial_description` | `false` / `true` | Leave timestamp-only screenshots unchanged when AI only returns a generic screenshot label |
 
 - **`false`** = disabled (default for both)
 - **`true`** = always run alongside text extraction
@@ -177,7 +186,19 @@ See `config.yaml.example` for full documentation of all settings.
 
 All enabled sources are combined before sending to the AI — maximizing extraction accuracy.
 
+Standalone image files (`.png`, `.jpg`, `.jpeg`, `.tif`, `.tiff`, `.bmp`, `.gif`, `.webp`, `.heic`, `.heif`) are supported by the CLI. On macOS, Apple Vision OCR and classification run locally when `image.apple_vision` is enabled. If `image.coreml_model_path` points to a compiled Core ML model, its `VNCoreMLRequest` observations are added as extra hints for the metadata extraction prompt.
+
 ## Usage
+
+### macOS Finder
+
+The Finder Quick Action can pass selected PDFs and standalone images to `quickaction-helper.sh`. Configure the workflow to receive `com.adobe.pdf` and `public.image`, and run:
+
+```bash
+path/to/autorename/quickaction-helper.sh "$@"
+```
+
+Select one or more supported files in Finder, then choose **Quick Actions > Rename with AutoRename**. The helper uses the project's `.venv`, preserves each file's extension, reports the batch result through a macOS notification, and writes diagnostics to `$HOME/Library/Logs/AutoRename-Finder.log`.
 
 ### GUI
 
@@ -205,6 +226,9 @@ After running `setup.ps1`, right-click in Windows Explorer:
 ```bash
 # Rename a single PDF
 autorename-pdf-cli.exe "C:\path\to\file.pdf"
+
+# Rename a standalone image file
+autorename-pdf-cli.exe "C:\path\to\receipt.png"
 
 # Preview what would be renamed (no changes made)
 autorename-pdf-cli.exe --dry-run "C:\path\to\folder"
@@ -256,7 +280,7 @@ applied run appends JSON Lines records to `.organize-log.jsonl` in the archive.
 
 | Subcommand | Description |
 |------------|-------------|
-| `rename` | Rename PDF files (default if omitted) |
+| `rename` | Rename PDF/image files (default if omitted) |
 | `undo` | Reverse file renames using the undo log |
 | `config show` | Display current configuration (API keys redacted) |
 | `config validate` | Validate configuration and report issues |

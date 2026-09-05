@@ -13,6 +13,7 @@ from _pdf_utils import (
     _mojibake_marker_count, _maybe_fix_mojibake,
     _get_bridge_script_path, _get_paddleocr_python,
     _paddleocr_available, ocr_with_paddleocr,
+    extract_image_content, is_image_file, _looks_like_screenshot,
 )
 
 
@@ -89,6 +90,71 @@ class TestRenderPagesToImages:
     def test_render_nonexistent_file(self):
         images = render_pages_to_images("/nonexistent/file.pdf")
         assert images == []
+
+
+class TestImageExtraction:
+    def test_is_image_file(self):
+        assert is_image_file("receipt.png") is True
+        assert is_image_file("receipt.HEIC") is True
+        assert is_image_file("receipt.pdf") is False
+
+    def test_looks_like_screenshot(self):
+        assert _looks_like_screenshot("screenshot_2024-01-02_14-21-44.png") is True
+        assert _looks_like_screenshot("Screen Shot 2024-01-02 at 2.21.44 PM.png") is True
+        assert _looks_like_screenshot("receipt.png") is False
+
+    def test_extract_image_content_uses_apple_vision_hints(self, tmp_path, sample_config):
+        image_path = tmp_path / "receipt.png"
+        image_path.write_bytes(b"not a real image; apple vision is mocked")
+
+        mock_result = MagicMock()
+        mock_result.text = "ACME Receipt\nMarch 15, 2024"
+        mock_result.classifications = [("receipt", 0.91)]
+        mock_result.coreml_observations = [("expense_report", 0.82)]
+        mock_result.warnings = []
+
+        sample_config["image"] = {
+            "apple_vision": True,
+            "llm_vision": False,
+        }
+        with patch("_pdf_utils.analyze_image_with_apple_vision", return_value=mock_result):
+            result = extract_image_content(str(image_path), sample_config)
+
+        assert "apple_vision_ocr" in result.sources
+        assert "apple_vision_classification" in result.sources
+        assert "ACME Receipt" in result.text
+        assert "VNCoreMLRequest observations" in result.text
+        assert result.images == []
+
+    def test_extract_image_content_adds_screenshot_context(self, tmp_path, sample_config):
+        image_path = tmp_path / "screenshot_2024-01-02_14-21-44.png"
+        image_path.write_bytes(b"not a real image; apple vision is mocked")
+
+        mock_result = MagicMock(text="", classifications=[], coreml_observations=[], warnings=[])
+        sample_config["image"] = {
+            "apple_vision": True,
+            "llm_vision": False,
+            "screenshot_mode": "auto",
+        }
+        with patch("_pdf_utils.analyze_image_with_apple_vision", return_value=mock_result):
+            result = extract_image_content(str(image_path), sample_config)
+
+        assert "screenshot_context" in result.sources
+        assert "visible UI text" in result.text
+        assert image_path.name in result.text
+
+    def test_extract_image_content_can_attach_image_for_llm_vision(self, tmp_path, sample_config):
+        image_path = tmp_path / "receipt.png"
+        image_path.write_bytes(b"not a real image; loader is mocked")
+
+        mock_result = MagicMock(text="", classifications=[], coreml_observations=[], warnings=[])
+        sample_config["image"] = {"apple_vision": False, "llm_vision": True}
+        with patch("_pdf_utils.analyze_image_with_apple_vision", return_value=mock_result), \
+             patch("_pdf_utils.load_image", return_value=MagicMock()):
+            result = extract_image_content(str(image_path), sample_config)
+
+        assert "vision" in result.sources
+        assert len(result.images) == 1
 
 
 class TestExtractContent:

@@ -21,7 +21,7 @@ from rich.console import Console
 
 from _config_loader import load_yaml_config
 from _ai_processing import extract_metadata
-from _pdf_utils import extract_content
+from _pdf_utils import IMAGE_EXTENSIONS, extract_content
 from _document_processing import (
     harmonize_company_name,
     parse_document_date,
@@ -51,6 +51,7 @@ _configure_stdio_utf8()
 
 # Constants
 PDF_EXTENSION = ".pdf"
+SUPPORTED_EXTENSIONS = {PDF_EXTENSION, *IMAGE_EXTENSIONS}
 UNDO_LOG_NAME = ".autorename-log.json"
 
 console = Console()
@@ -284,28 +285,32 @@ def get_base_directory(config_path: str | None = None):
 # File collection
 # ---------------------------------------------------------------------------
 
+def _is_supported_document(filename: str) -> bool:
+    return os.path.splitext(filename)[1].lower() in SUPPORTED_EXTENSIONS
+
+
 def collect_pdf_files(input_paths: list, recursive: bool = False) -> list:
-    """Collect all PDF files from input paths."""
+    """Collect all supported PDF and image files from input paths."""
     pdf_files = []
     for input_path in input_paths:
         # Strip trailing quotes/backslashes mangled by Windows shell escaping
         # e.g. "C:\folder\" becomes C:\folder" due to \" escape
         input_path = normalize_unicode(input_path.strip('"').rstrip('\\').rstrip('/'))
         if os.path.isfile(input_path):
-            if input_path.lower().endswith(PDF_EXTENSION):
+            if _is_supported_document(input_path):
                 pdf_files.append(input_path)
             else:
-                logging.warning(f"Not a PDF: {input_path}")
+                logging.warning(f"Not a supported PDF/image file: {input_path}")
         elif os.path.isdir(input_path):
             if recursive:
                 for root, _, files in os.walk(input_path):
                     for f in files:
-                        if f.lower().endswith(PDF_EXTENSION):
+                        if _is_supported_document(f):
                             pdf_files.append(os.path.join(root, f))
             else:
                 for f in os.listdir(input_path):
                     fp = os.path.join(input_path, f)
-                    if os.path.isfile(fp) and f.lower().endswith(PDF_EXTENSION):
+                    if os.path.isfile(fp) and _is_supported_document(f):
                         pdf_files.append(fp)
         else:
             logging.error(f"Not a valid file or folder: {input_path}")
@@ -359,6 +364,10 @@ def process_pdf(
             _step(output, "\u2713", "green", "Text extracted", f"quality {q}")
             if "ocr" in extraction.sources:
                 _step(output, "\u2713", "green", "PaddleOCR")
+            if "apple_vision_ocr" in extraction.sources:
+                _step(output, "\u2713", "green", "Apple Vision OCR")
+            if "apple_vision_classification" in extraction.sources:
+                _step(output, "\u2713", "green", "Apple Vision classification")
             if "vision" in extraction.sources:
                 _step(output, "\u2713", "green", "Vision", "page images")
             for w in extraction.warnings:
@@ -430,6 +439,7 @@ _KNOWN_SUBCOMMANDS = {"rename", "organize", "undo", "config"}
 EPILOG = """\
 examples:
   autorename-pdf invoice.pdf                Rename a single PDF
+  autorename-pdf receipt.jpg --dry-run      Preview an image rename
   autorename-pdf *.pdf --dry-run            Preview renames without changes
   autorename-pdf ./invoices -r              Recursively process a folder
   autorename-pdf organize ~/Downloads       Preview organization of old files
@@ -446,9 +456,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="autorename-pdf",
         description=(
-            "AI-powered PDF auto-renamer. Extracts company name, date, and "
-            "document type from PDFs using an LLM, renames files to "
-            "YYYYMMDD COMPANY DOCTYPE.pdf format.\n\n"
+            "AI-powered document auto-renamer. Extracts company name, date, and "
+            "document type from PDFs and images using OCR/vision plus an LLM, "
+            "then renames files to YYYYMMDD COMPANY DOCTYPE.ext format.\n\n"
             "Supports --output json for structured output suitable for "
             "scripting and GUI integration."
         ),
@@ -499,13 +509,13 @@ def build_parser() -> argparse.ArgumentParser:
     rename_parser = subparsers.add_parser(
         "rename",
         parents=[_shared],
-        help="Rename PDF files (default subcommand)",
-        description="Rename PDF files using AI-extracted metadata.",
+        help="Rename PDF/image files (default subcommand)",
+        description="Rename PDF and image files using AI-extracted metadata.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     rename_parser.add_argument(
         "paths", nargs="*", default=[],
-        help="PDF files or folders to process"
+        help="PDF/image files or folders to process"
     )
     rename_parser.add_argument(
         "--dry-run", action="store_true",
@@ -879,7 +889,7 @@ def _handle_rename(args: argparse.Namespace, output_format: str) -> None:
     if not pdf_files:
         error_exit(
             "no_files",
-            "No PDF files found in the specified paths.",
+            "No supported PDF/image files found in the specified paths.",
             exit_code=ExitCode.NO_FILES,
             output_format=output_format,
         )
