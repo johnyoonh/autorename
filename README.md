@@ -12,11 +12,17 @@
 
 ![AutoRename-PDF desktop GUI showing drag-and-drop PDF renaming with AI-extracted metadata](screenshot/autorename-pdf-gui.png)
 
+AutoRename is for people who want a local document-renaming and Downloads-filing
+workflow. It owns extraction, naming, grouping, deduplication, and placement in
+explicitly allowlisted filesystem roots; it does not manage cloud accounts or
+scan remote services through provider APIs.
+
 - **Desktop GUI** — Drag-and-drop files, preview renames before applying, undo if needed
 - **5 AI Providers** — OpenAI, Anthropic (Claude), Google Gemini, xAI (Grok), and Ollama for free offline use
 - **3-Tier Extraction** — Text extraction (free, instant) + OCR for scanned PDFs + vision for image-only PDFs
 - **Windows Integration** — Right-click context menu in Windows Explorer for instant renaming
 - **Batch Processing** — Rename hundreds of PDFs at once with automatic company name harmonization
+- **Downloads Organizer** — Deduplicate, flatten, group, and file aging downloads into indexed cloud folders
 - **Privacy Option** — Run fully offline with Ollama + PaddleOCR — no data leaves your machine
 
 ## Quick Start
@@ -225,53 +231,66 @@ After running `setup.ps1`, right-click in Windows Explorer:
 
 ```bash
 # Rename a single PDF
-autorename-pdf-cli.exe "C:\path\to\file.pdf"
+autorename.exe "C:\path\to\file.pdf"
 
 # Rename a standalone image file
-autorename-pdf-cli.exe "C:\path\to\receipt.png"
+autorename.exe "C:\path\to\receipt.png"
 
 # Preview what would be renamed (no changes made)
-autorename-pdf-cli.exe --dry-run "C:\path\to\folder"
+autorename.exe --dry-run "C:\path\to\folder"
 
 # Process folders recursively
-autorename-pdf-cli.exe --recursive "C:\path\to\folder"
+autorename.exe --recursive "C:\path\to\folder"
 
 # Undo the last rename operation
-autorename-pdf-cli.exe undo
+autorename.exe undo
 
 # Override AI provider/model for one run
-autorename-pdf-cli.exe --provider anthropic --model claude-sonnet-4-6 "file.pdf"
+autorename.exe --provider anthropic --model claude-sonnet-4-6 "file.pdf"
 
 # Enable vision and/or OCR
-autorename-pdf-cli.exe --vision --ocr "scanned_document.pdf"
+autorename.exe --vision --ocr "scanned_document.pdf"
 
 # JSON output (for scripting / GUI integration)
-autorename-pdf-cli.exe rename --output json "C:\path\to\folder"
+autorename.exe rename --output json "C:\path\to\folder"
 ```
 
-### Downloads aging workflow
+### Indexed Downloads workflow
 
-On macOS or Linux, preview top-level files that have remained in Downloads for
-more than 30 days:
+Copy `root-structure.yaml.example` to the private `root-structure.yaml`, then
+replace the placeholder cloud root and destinations with locally synced paths.
+Build the metadata catalog without hashing every file:
 
 ```bash
-python autorename-pdf.py organize ~/Downloads
+autorename organize index
 ```
 
-PDFs are renamed with the normal AI pipeline before classification. Other files
-use deterministic extension rules. The default destination is
-`~/Archives/Downloads`, organized by category and year. Unknown formats, failed
-PDF analysis, and destination collisions are routed to `Review`; hidden files,
-partial downloads, folders, and symlinks are ignored.
+Run `autorename organize intake "$HOME/Downloads" --apply` every five minutes.
+The first scan records file size and modification time; a later unchanged scan
+performs lazy exact-hash matching, removes the incoming duplicate, and surfaces
+the indexed canonical file.
 
-Preview is the default. Apply a reviewed batch explicitly:
+Preview files older than 30 days. Nested ordinary folders are flattened, related
+files are grouped, and indexed tags, aliases, and existing filenames determine
+the destination. If no destination reaches the confidence threshold, a new
+group is created below the configured managed inbox.
 
 ```bash
-python autorename-pdf.py organize ~/Downloads --apply
+autorename organize run "$HOME/Downloads"
 ```
 
-Use `--skip-pdf-renaming` for an offline, extension-only run. Every preview and
-applied run appends JSON Lines records to `.organize-log.jsonl` in the archive.
+Apply a reviewed batch explicitly, or use this form from a scheduler:
+
+```bash
+autorename organize run "$HOME/Downloads" --apply
+```
+
+Exact duplicate content is removed only after the indexed canonical file is
+re-hashed. Its modification time is updated so it appears among recent files.
+Every action is journaled and can be reversed with
+`autorename organize undo <run-id>`. Agy and sandboxed Codex Luna are optional
+tie-breakers for ambiguous destinations; edit `organize.recognition_backends`
+to disable either backend.
 
 <details>
 <summary><strong>Full CLI Reference</strong></summary>
@@ -281,6 +300,11 @@ applied run appends JSON Lines records to `.organize-log.jsonl` in the archive.
 | Subcommand | Description |
 |------------|-------------|
 | `rename` | Rename PDF/image files (default if omitted) |
+| `organize run` | Preview or apply Downloads organization |
+| `organize intake` | Detect settled exact duplicates |
+| `organize index` | Refresh configured cloud-root metadata |
+| `organize status` | Display index freshness and counts |
+| `organize undo` | Reverse one organization run |
 | `undo` | Reverse file renames using the undo log |
 | `config show` | Display current configuration (API keys redacted) |
 | `config validate` | Validate configuration and report issues |
@@ -411,8 +435,8 @@ After setup, edit `config.yaml` with your AI provider API key and run:
 
 ```bash
 source venv/bin/activate
-python autorename-pdf.py --dry-run invoice.pdf
-python autorename-pdf.py invoice.pdf
+autorename --dry-run invoice.pdf
+autorename invoice.pdf
 ```
 
 ### Manual Setup
@@ -432,8 +456,8 @@ cp config.yaml.example config.yaml
 # Edit config.yaml with your AI key and provider
 
 # Run
-python autorename-pdf.py --dry-run invoice.pdf
-python autorename-pdf.py invoice.pdf
+./autorename --dry-run invoice.pdf
+./autorename invoice.pdf
 ```
 
 **Platform notes:**

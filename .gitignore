@@ -7,6 +7,8 @@ __pycache__/
 /Releases/
 config.yaml
 harmonized-company-names.yaml
+root-structure.yaml
+*.organization-index.sqlite*
 *.pdf
 *.spec
 *.zip

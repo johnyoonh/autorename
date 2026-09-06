@@ -100,6 +100,13 @@ output:
   omit_unknown_components: true              # Omit weak values like Unknown instead of writing them
   skip_when_no_substantial_description: true # Leave timestamp-only screenshots unchanged if AI only says "screenshot"
 
+# Downloads organization. Agy is tried first for ambiguous destination choices;
+# sandboxed Codex Luna is the fallback. Remove either name to disable it.
+organize:
+  recognition_backends: ["agy", "codex"]
+  recognition_timeout: 60
+  maximum_files: 100
+
 # Optional AI Prompt Extension
 # Add custom instructions to fine-tune extraction, e.g.:
 # prompt_extension: 'If it is an incoming or outgoing invoice, add the total amount like "ER 1234,56".'

@@ -79,6 +79,11 @@ DEFAULTS = {
         "omit_unknown_components": True,
         "skip_when_no_substantial_description": True,
     },
+    "organize": {
+        "recognition_backends": ["agy", "codex"],
+        "recognition_timeout": 60,
+        "maximum_files": 100,
+    },
     "prompt_extension": "",
 }
 

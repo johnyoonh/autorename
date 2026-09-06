@@ -3,10 +3,10 @@ repository = "johnyoonh/autorename"
 
 [[commands]]
 name = "autorename"
-summary = "Normalize, classify, rename, and safely route document files"
+summary = "Normalize, classify, rename, organize, and safely route document files"
 entrypoint = "autorename"
 aliases = ["autorename-pdf"]
-capabilities = ["documents.normalize"]
+capabilities = ["documents.normalize", "documents.autorename"]
 
 [[commands.routes]]
 path = ["process"]

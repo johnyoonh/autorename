@@ -1,0 +1,21 @@
+version: 1
+
+# Copy to root-structure.yaml. Keep that private file out of Git because it
+# contains personal cloud paths and folder names.
+roots:
+  - id: cloud
+    path: "${HOME}/Library/CloudStorage/ExampleCloud"
+    priority: 10
+    managed_inbox: "Filed"
+    protected:
+      - ".Trash"
+      - "Private"
+    destinations:
+      - id: finance
+        path: "Documents/Finance"
+        tags: [invoice, receipt, tax, statement]
+        aliases: [financial, accounting]
+      - id: projects
+        path: "Projects"
+        tags: [project, specification, reference]
+        aliases: [work]

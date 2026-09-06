@@ -36,7 +36,7 @@ GUI_TAURI_DIR = GUI_DIR / "src-tauri"
 GUI_ICON = GUI_TAURI_DIR / "icons" / "icon.ico"
 
 PYTHON_SCRIPT = "autorename-pdf.py"
-OUTPUT_EXE = "autorename-pdf.exe"
+OUTPUT_EXE = "autorename.exe"
 BRIDGE_SCRIPT = "_paddleocr_bridge.py"
 
 SIDECAR_SOURCE = "autorename-pdf-cli-x86_64-pc-windows-msvc.exe"
@@ -52,6 +52,7 @@ BUNDLE_FILES = [
     "setup.ps1",
     "config.yaml.example",
     "harmonized-company-names.yaml.example",
+    "root-structure.yaml.example",
     ".env.example",
 ]
 
@@ -258,6 +259,10 @@ def create_staging(cli_exe, gui_exe):
     dst_sidecar = STAGING_DIR / SIDECAR_RUNTIME
     print(f"  + {SIDECAR_RUNTIME} (CLI sidecar + context menu)")
     shutil.copy2(str(cli_exe), str(dst_sidecar))
+
+    dst_cli = STAGING_DIR / OUTPUT_EXE
+    print(f"  + {OUTPUT_EXE} (canonical CLI)")
+    shutil.copy2(str(cli_exe), str(dst_cli))
 
     # Bundle files
     for f in BUNDLE_FILES:

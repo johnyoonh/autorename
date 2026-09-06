@@ -78,14 +78,15 @@ class TestBuildParser:
 
     def test_organize_defaults_to_preview(self):
         parser = build_parser()
-        args = parser.parse_args(["organize"])
+        args = parser.parse_args(["organize", "run"])
         assert args.subcommand == "organize"
+        assert args.organize_action == "run"
         assert args.older_than == 30
         assert args.apply is False
 
     def test_organize_apply_and_destination(self):
         parser = build_parser()
-        args = parser.parse_args(["organize", "/tmp/inbox", "--destination", "/tmp/archive", "--apply"])
+        args = parser.parse_args(["organize", "run", "/tmp/inbox", "--destination", "/tmp/archive", "--apply"])
         assert args.source == "/tmp/inbox"
         assert args.destination == "/tmp/archive"
         assert args.apply is True
@@ -220,7 +221,18 @@ class TestPreprocessArgv:
         assert result == ["undo"]
 
     def test_organize_subcommand_unchanged(self):
-        assert _preprocess_argv(["organize", "/tmp/inbox"]) == ["organize", "/tmp/inbox"]
+        assert _preprocess_argv(["organize", "/tmp/inbox"]) == ["organize", "run", "/tmp/inbox"]
+
+    def test_organize_action_is_unchanged(self):
+        assert _preprocess_argv(["organize", "index"]) == ["organize", "index"]
+
+    def test_organize_intake_is_unchanged(self):
+        assert _preprocess_argv(["organize", "intake", "/tmp/inbox"]) == [
+            "organize", "intake", "/tmp/inbox"
+        ]
+
+    def test_organize_help_shows_action_parser(self):
+        assert _preprocess_argv(["organize", "--help"]) == ["organize", "--help"]
 
     def test_empty_argv(self):
         result = _preprocess_argv([])

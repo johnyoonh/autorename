@@ -18,9 +18,9 @@ pip install -r requirements-dev.txt  # for testing
 
 All commands assume the venv is activated.
 
-- **Run**: `python autorename-pdf.py [options] <files_or_folders>`
-- **Dry run**: `python autorename-pdf.py --dry-run <files_or_folders>`
-- **Undo**: `python autorename-pdf.py --undo`
+- **Run**: `autorename [options] <files_or_folders>`
+- **Dry run**: `autorename --dry-run <files_or_folders>`
+- **Undo**: `autorename undo`
 - **Test**: `pytest tests/ -v --cov`
 - **Build EXE**: `python build.py`
 - **Install deps**: `pip install -r requirements.txt`
@@ -32,7 +32,7 @@ All commands assume the venv is activated.
 - **Skill (dev)**: `/rename-pdfs <path>` — Python source, requires venv. For development and macOS/Linux.
 - **Skill (prod)**: `/rename-pdfs-exe <path>` — compiled EXE, Windows only. For production/automation.
 - Both skills dry-run first, then ask for confirmation before renaming.
-- **CLI JSON mode**: `python autorename-pdf.py rename <path> --output json`
+- **CLI JSON mode**: `autorename rename <path> --output json`
 - **Exit codes**: 0=success, 1=error, 2=usage, 3=config, 4=no files, 5=partial, 10=provider, 11=auth
 - **Subcommands**: `rename`, `undo`, `config show`, `config validate`
 - **Primary usage**: GUI app (Tauri) or Windows context menu via compiled EXE from release ZIP.

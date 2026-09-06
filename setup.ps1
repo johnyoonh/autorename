@@ -62,6 +62,7 @@ Write-Host ""
 function Find-AutoRenamePDF {
     <# Find the CLI executable. Searches multiple locations for portable/standalone layouts. #>
     $candidates = @(
+        (Join-Path $PSScriptRoot "autorename.exe"),
         (Join-Path $PSScriptRoot "autorename-pdf-cli.exe"),
         (Join-Path $PSScriptRoot "autorename-pdf.exe")
     )
@@ -366,8 +367,8 @@ if ($choice -eq "I" -or $choice -eq "i") {
     }
     else {
         $results["context_menu"] = @{ Status = "skip"; Label = "Context menu (no EXE found)" }
-        Write-Host "  [--] autorename-pdf-cli.exe not found -- context menu not available." -ForegroundColor Yellow
-        Write-Host "       You can run the tool via: python autorename-pdf.py file.pdf" -ForegroundColor Gray
+        Write-Host "  [--] autorename.exe not found -- context menu not available." -ForegroundColor Yellow
+        Write-Host "       You can run the tool via: autorename file.pdf" -ForegroundColor Gray
     }
 
     # ── 3. PaddleOCR (optional) ───────────────────────────────────────────────
@@ -413,7 +414,7 @@ if ($choice -eq "I" -or $choice -eq "i") {
         Write-Host "    2. Right-click any PDF or folder to auto-rename" -ForegroundColor White
     }
     else {
-        Write-Host "    2. Run: python autorename-pdf.py <file.pdf>" -ForegroundColor White
+        Write-Host "    2. Run: autorename <file.pdf>" -ForegroundColor White
     }
 }
 elseif ($choice -eq "U" -or $choice -eq "u") {
