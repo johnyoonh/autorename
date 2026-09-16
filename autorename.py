@@ -11,7 +11,6 @@ import json
 import os
 import runpy
 import sys
-from pathlib import Path
 
 from _config_loader import load_yaml_config
 from _pipeline import AuditStore, collect_pdfs, load_routing_config, process_document, process_paths, route_document, _audit_db_path
@@ -25,7 +24,19 @@ def _shared(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("paths", nargs="+", help="PDF files or directories")
     parser.add_argument("--recursive", "-r", action="store_true", help="Process directories recursively")
     parser.add_argument("--apply", action="store_true", help="Apply file mutations; default is preview")
-    parser.add_argument("--config", dest="config_path", default=None, help="Path to config.yaml")
+    parser.add_argument(
+        "--config",
+        "--routing-config",
+        dest="routing_config",
+        default=DEFAULT_ROUTING_CONFIG,
+        help="Private routing policy YAML (default: ~/.config/autorename/routing.yaml)",
+    )
+    parser.add_argument(
+        "--app-config",
+        dest="app_config_path",
+        default=None,
+        help="AI/OCR application config (default: AUTORENAME_APP_CONFIG or repository config.yaml)",
+    )
     parser.add_argument("--output", "-o", choices=["text", "json"], default="text")
     parser.add_argument("--provider", default=None, help="Override AI provider")
     parser.add_argument("--model", default=None, help="Override AI model")
@@ -46,24 +57,19 @@ def build_parser() -> argparse.ArgumentParser:
     process = sub.add_parser("process", help="Verify OCR, canonical name, classification, and route readiness")
     _shared(process)
     process.add_argument("--route", action="store_true", help="Route ready/review files in this same invocation")
-    process.add_argument(
-        "--routing-config",
-        default=DEFAULT_ROUTING_CONFIG,
-        help="Private routing policy used with --route",
-    )
 
     route = sub.add_parser("route", help="Route files only after process-state verification")
     _shared(route)
-    route.add_argument("--routing-config", default=DEFAULT_ROUTING_CONFIG)
 
     return parser
 
 
 def _config(args: argparse.Namespace) -> tuple[dict, str]:
-    config_path = os.path.abspath(os.path.expanduser(args.config_path)) if args.config_path else os.path.join(BASE_DIR, "config.yaml")
+    configured = args.app_config_path or os.environ.get("AUTORENAME_APP_CONFIG")
+    config_path = os.path.abspath(os.path.expanduser(configured)) if configured else os.path.join(BASE_DIR, "config.yaml")
     config = load_yaml_config(config_path)
     if not config:
-        raise RuntimeError(f"Could not load config: {config_path}")
+        raise RuntimeError(f"Could not load application config: {config_path}")
 
     if args.provider:
         config["ai"]["provider"] = args.provider
@@ -85,6 +91,13 @@ def _config(args: argparse.Namespace) -> tuple[dict, str]:
             raise RuntimeError("--min-confidence must be between 0 and 1")
         normalization["min_confidence"] = args.min_confidence
     return config, config_path
+
+
+def _routing(args: argparse.Namespace) -> dict:
+    path = os.path.abspath(os.path.expanduser(args.routing_config))
+    if not os.path.isfile(path):
+        raise RuntimeError(f"Could not load routing config: {path}")
+    return load_routing_config(path)
 
 
 def _summary(payload: dict) -> None:
@@ -115,7 +128,7 @@ def _summary(payload: dict) -> None:
 def _run_process(args: argparse.Namespace) -> int:
     config, config_path = _config(args)
     yaml_path = os.path.join(os.path.dirname(config_path), "harmonized-company-names.yaml")
-    routing = load_routing_config(args.routing_config) if args.route else None
+    routing = _routing(args) if args.route else None
     payload = process_paths(
         args.paths,
         config,
@@ -128,14 +141,17 @@ def _run_process(args: argparse.Namespace) -> int:
         print(json.dumps(payload, indent=2, ensure_ascii=False))
     else:
         _summary(payload)
-    states = payload.get("states", [])
-    return 5 if any(state.get("state") == "REVIEW" for state in states) else 0
+
+    # REVIEW/DUPLICATE/DEFERRED are safe business states, not command failures.
+    # This lets a single scheduled wrapper continue to the routing phase, where
+    # review policy can move uncertain files to the configured Review folder.
+    return 0
 
 
 def _run_route(args: argparse.Namespace) -> int:
     config, config_path = _config(args)
     yaml_path = os.path.join(os.path.dirname(config_path), "harmonized-company-names.yaml")
-    routing = load_routing_config(args.routing_config)
+    routing = _routing(args)
     files = collect_pdfs(args.paths, recursive=args.recursive)
     store = AuditStore(_audit_db_path(config))
     states = []
@@ -154,6 +170,9 @@ def _run_route(args: argparse.Namespace) -> int:
         print(json.dumps(payload, indent=2, ensure_ascii=False))
     else:
         _summary(payload)
+
+    # A destination collision/configuration failure is operationally actionable;
+    # normal review routing is represented by moved_to_review/planned_review.
     return 5 if any(route.get("status") == "review" for route in routes) else 0
 
 
@@ -194,8 +213,8 @@ def main(argv: list[str] | None = None) -> int:
             "  rename    AI PDF rename\n"
             "  organize  Downloads aging workflow\n"
             "  undo      reverse rename batches\n"
-            "  config    inspect configuration\n\n"
-            "Run 'autorename process --help' or the legacy route with --help for details."
+            "  config    inspect application configuration\n\n"
+            "For process/route, --config is the private routing YAML; use --app-config for AI/OCR config."
         )
         return 0 if argv else 2
 
