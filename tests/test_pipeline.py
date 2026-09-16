@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import _pipeline
 from _normalization import NormalizationMetadata, PersistentOcrResult, ReviewAssessment
 from _pdf_utils import ExtractionResult
@@ -28,7 +30,7 @@ def _config():
             "min_confidence": 0.85,
             "min_file_age_seconds": 0,
             "persistent_ocr": "auto",
-            "categories": ["education", "other"],
+            "categories": ["education", "finance_tax", "other"],
         },
         "output": {"date_format": "%Y%m%d"},
     }
@@ -56,7 +58,7 @@ def test_process_uses_cached_metadata_and_marks_ready(monkeypatch, tmp_path):
     monkeypatch.setattr(
         _pipeline,
         "_cached_extraction",
-        lambda path, quality: ExtractionResult(text="searchable document text", quality_score=0.94, sources=["text"]),
+        lambda path, quality, config: ExtractionResult(text="searchable document text", quality_score=0.94, sources=["text"]),
     )
     monkeypatch.setattr(
         _pipeline,
@@ -82,11 +84,17 @@ def test_route_uses_symbolic_category_destination(tmp_path):
     state = {
         "path": str(source),
         "sha256": "abc",
+        "ocr": {"status": "ready"},
+        "rename": {"canonical": True},
         "classification": {"category": "education", "confidence": 0.97},
         "routing": {"ready": True, "needs_review": False, "reasons": []},
     }
     routing = {
-        "readiness": {"minimum_classification_confidence": 0.90},
+        "readiness": {
+            "require_searchable_pdf": True,
+            "require_canonical_filename": True,
+            "minimum_classification_confidence": 0.90,
+        },
         "fallback": {"destination": "review"},
         "routes": [{"category": "education", "destination": "education"}],
         "destinations": {
@@ -102,12 +110,43 @@ def test_route_uses_symbolic_category_destination(tmp_path):
     assert result["destination"] == str(destination_root / source.name)
 
 
+def test_route_accepts_private_alias_list_for_composite_category(tmp_path):
+    source = tmp_path / "20260909 Example Bank Tax Statement.pdf"
+    source.write_bytes(b"content")
+    state = {
+        "path": str(source),
+        "sha256": "abc",
+        "ocr": {"status": "ready"},
+        "rename": {"canonical": True},
+        "classification": {"category": "finance_tax", "confidence": 0.97},
+        "routing": {"ready": True, "needs_review": False, "reasons": []},
+    }
+    financial = tmp_path / "financial"
+    routing = {
+        "readiness": {"minimum_classification_confidence": 0.90},
+        "fallback": {"destination": "review"},
+        "routes": [{"categories": ["financial", "finance", "tax"], "destination": "financial"}],
+        "destinations": {
+            "financial": {"path": str(financial)},
+            "review": {"path": str(tmp_path / "review")},
+        },
+    }
+
+    result = _pipeline.route_document(state, routing, apply=False)
+
+    assert result["status"] == "planned"
+    assert result["route_ready"] is True
+    assert result["destination"] == str(financial / source.name)
+
+
 def test_route_below_threshold_goes_to_review(tmp_path):
     source = tmp_path / "document.pdf"
     source.write_bytes(b"content")
     state = {
         "path": str(source),
         "sha256": "abc",
+        "ocr": {"status": "ready"},
+        "rename": {"canonical": True},
         "classification": {"category": "education", "confidence": 0.80},
         "routing": {"ready": True, "needs_review": False, "reasons": []},
     }
@@ -130,13 +169,16 @@ def test_route_below_threshold_goes_to_review(tmp_path):
     assert result["destination"] == str(review_root / source.name)
 
 
-def test_apply_route_moves_one_file(tmp_path):
+def test_apply_route_moves_one_file_and_writes_jsonl_audit(tmp_path):
     source = tmp_path / "source.pdf"
     source.write_bytes(b"content")
     destination_root = tmp_path / "education"
+    audit_path = tmp_path / "state" / "routing.jsonl"
     state = {
         "path": str(source),
         "sha256": "abc",
+        "ocr": {"status": "ready"},
+        "rename": {"canonical": True},
         "classification": {"category": "education", "confidence": 0.96},
         "routing": {"ready": True, "needs_review": False, "reasons": []},
     }
@@ -148,6 +190,7 @@ def test_apply_route_moves_one_file(tmp_path):
             "education": {"path": str(destination_root)},
             "review": {"path": str(tmp_path / "review")},
         },
+        "audit": {"enabled": True, "path": str(audit_path)},
     }
 
     result = _pipeline.route_document(state, routing, apply=True)
@@ -155,3 +198,6 @@ def test_apply_route_moves_one_file(tmp_path):
     assert result["status"] == "routed"
     assert not source.exists()
     assert (destination_root / source.name).read_bytes() == b"content"
+    record = json.loads(audit_path.read_text(encoding="utf-8").strip())
+    assert record["sha256"] == "abc"
+    assert record["status"] == "routed"
