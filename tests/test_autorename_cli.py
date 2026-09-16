@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 import autorename
 
 
@@ -33,6 +35,28 @@ def test_routing_config_remains_alias_for_config():
     assert args.routing_config == "/tmp/private-routing.yaml"
 
 
+def test_unresolved_destination_environment_fails_closed():
+    routing = {
+        "destinations": {
+            "records": {"path": "${MISSING_RECORDS_ROOT}/30_education"},
+            "review": {"path": "/tmp/review"},
+        }
+    }
+
+    with pytest.raises(RuntimeError, match="Unresolved environment variable"):
+        autorename._validate_routing_paths(routing)
+
+
+def test_unresolved_enabled_audit_environment_fails_closed():
+    routing = {
+        "destinations": {"review": {"path": "/tmp/review"}},
+        "audit": {"enabled": True, "path": "${MISSING_STATE_DIR}/routing.jsonl"},
+    }
+
+    with pytest.raises(RuntimeError, match="audit.path"):
+        autorename._validate_routing_paths(routing)
+
+
 def test_review_states_do_not_abort_process_wrapper(monkeypatch, tmp_path):
     app_config = tmp_path / "config.yaml"
     app_config.write_text("stub", encoding="utf-8")
@@ -50,7 +74,16 @@ def test_review_states_do_not_abort_process_wrapper(monkeypatch, tmp_path):
             "apply": True,
             "total": 1,
             "route_enabled": False,
-            "states": [{"state": "REVIEW", "path": "/tmp/document.pdf", "ocr": {}, "rename": {}, "classification": {}, "routing": {"reasons": ["needs_review"]}}],
+            "states": [
+                {
+                    "state": "REVIEW",
+                    "path": "/tmp/document.pdf",
+                    "ocr": {},
+                    "rename": {},
+                    "classification": {},
+                    "routing": {"reasons": ["needs_review"]},
+                }
+            ],
             "routes": [],
         },
     )
