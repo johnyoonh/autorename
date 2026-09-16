@@ -163,9 +163,11 @@ def _run_process(args: argparse.Namespace) -> int:
     else:
         _summary(payload)
 
-    # REVIEW/DUPLICATE/DEFERRED are safe business states, not command failures.
-    # This lets a single scheduled wrapper continue to the routing phase, where
-    # review policy can move uncertain files to the configured Review folder.
+    # REVIEW/DUPLICATE/DEFERRED are safe document states. When combined routing
+    # is enabled, however, a route status of "review" means the configured
+    # destination itself could not be used safely (for example a collision).
+    if args.route and any(route.get("status") == "review" for route in payload.get("routes", [])):
+        return 5
     return 0
 
 
