@@ -44,24 +44,24 @@ def test_persistent_ocr_auto_only_for_low_quality():
 
 def test_archival_filename_matches_stable_shape():
     name = build_archival_filename(
-        "USCIS",
+        "Example University",
         datetime.date(2026, 9, 2),
-        "Biometrics Appointment Notice",
+        "Enrollment Confirmation",
         _config(),
     )
-    assert name == "20260902 USCIS Biometrics Appointment Notice.pdf"
+    assert name == "20260902 Example University Enrollment Confirmation.pdf"
 
 
 def test_review_gate_accepts_complete_high_confidence_metadata():
     metadata = NormalizationMetadata(
-        organization="USCIS",
+        organization="Example University",
         document_date="02.09.2026",
-        document_type="Biometrics Appointment Notice",
-        category="identity_immigration",
+        document_type="Enrollment Confirmation",
+        category="education",
         confidence=0.97,
     )
     extraction = ExtractionResult(
-        text="USCIS appointment notice " * 40,
+        text="Example University enrollment confirmation " * 40,
         quality_score=0.95,
         sources=["text"],
     )
@@ -75,14 +75,14 @@ def test_review_gate_accepts_complete_high_confidence_metadata():
 
 def test_review_gate_rejects_missing_date_even_with_high_model_confidence():
     metadata = NormalizationMetadata(
-        organization="USCIS",
+        organization="Example University",
         document_date="",
-        document_type="Biometrics Appointment Notice",
-        category="identity_immigration",
+        document_type="Enrollment Confirmation",
+        category="education",
         confidence=0.99,
     )
     extraction = ExtractionResult(
-        text="USCIS appointment notice " * 40,
+        text="Example University enrollment confirmation " * 40,
         quality_score=0.95,
         sources=["text"],
     )
@@ -95,7 +95,7 @@ def test_review_gate_rejects_missing_date_even_with_high_model_confidence():
 
 def test_collision_identifies_exact_duplicate(tmp_path):
     source = tmp_path / "scan.pdf"
-    target = tmp_path / "20260902 USCIS Notice.pdf"
+    target = tmp_path / "20260902 Example University Confirmation.pdf"
     content = b"same bytes"
     source.write_bytes(content)
     target.write_bytes(content)
@@ -108,7 +108,7 @@ def test_collision_identifies_exact_duplicate(tmp_path):
 
 def test_collision_does_not_treat_same_name_different_content_as_duplicate(tmp_path):
     source = tmp_path / "scan.pdf"
-    target = tmp_path / "20260902 USCIS Notice.pdf"
+    target = tmp_path / "20260902 Example University Confirmation.pdf"
     source.write_bytes(b"first document")
     target.write_bytes(b"second document")
 
