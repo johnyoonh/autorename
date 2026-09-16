@@ -29,26 +29,50 @@ ai:
 # PDF Processing
 pdf:
   max_pages: 3                    # Max pages to process per PDF
-  ocr: "auto"                     # false / true / "auto" — PaddleOCR for scanned PDFs
+  ocr: "auto"                    # false / true / "auto" — PaddleOCR for scanned PDFs
   vision: false                   # false / true / "auto" — send page images to LLM
   text_quality_threshold: 0.3     # Triggers OCR/vision when set to "auto"
   outgoing_invoice: "AR"          # Abbreviation for outgoing invoices (Accounts Receivable)
   incoming_invoice: "ER"          # Abbreviation for incoming invoices (Expense Reports)
 
+# Persistent archival normalization (used by normalize-documents.py only).
+# This is intentionally separate from pdf.ocr: PaddleOCR can help the model
+# understand a scan without changing the file, while persistent_ocr writes a
+# searchable text layer into the PDF using the external OCRmyPDF CLI.
+normalization:
+  persistent_ocr: "auto"          # auto / always / never
+  ocrmypdf_command: "ocrmypdf"     # executable name or absolute path
+  ocrmypdf_mode: "skip"            # OCRmyPDF --mode value; skip preserves pages with text
+  ocrmypdf_args: []                # optional extra OCRmyPDF CLI args
+  keep_original_before_ocr: false  # if true, copy original before replacing with OCR output
+  original_backup_dir: ".autorename-originals"
+  min_confidence: 0.85             # below this, normalize-documents routes to review status
+  review_on_ocr_failure: true      # do not auto-rename scans when searchable OCR was required but failed
+  categories:
+    - identity_immigration
+    - finance_tax
+    - education
+    - medical
+    - vehicle_insurance
+    - housing
+    - employment
+    - legal
+    - other
+
 # PaddleOCR Configuration (optional, install via setup.ps1)
 paddleocr:
   venv_path: ""                   # Auto-detected if empty
-  language: "en"                   # OCR language code (one language per instance)
+  language: "en"                  # OCR language code (one language per instance)
                                    #   "en" = English-only model (smaller, faster)
                                    #   "de","fr","es",etc. = Latin model (all 59 Latin-script langs incl. English)
                                    #   "ch" = Chinese model (also handles Japanese and English)
                                    #   For European docs, use your country code -- it covers English too.
   device: "cpu"                   # "auto", "cpu", or "gpu"
   # detection_model: ""           # Detection model (default: PP-OCRv5_mobile_det)
-                                  #   Use "PP-OCRv5_server_det" for higher accuracy
-                                  #   on complex layouts (uses more RAM)
-  # det_limit_side_len: 736       # Max image side for detection (lower = less RAM)
-  # cpu_threads: 4                # CPU threads for OCR inference (default: 4)
+                                   #   Use "PP-OCRv5_server_det" for higher accuracy
+                                   #   on complex layouts (uses more RAM)
+  # det_limit_side_len: 736        # Max image side for detection (lower = less RAM)
+  # cpu_threads: 4                 # CPU threads for OCR inference (default: 4)
 
 # Company Information
 company:
@@ -57,7 +81,7 @@ company:
 # Output Settings
 output:
   language: "English"             # Language for document type descriptions
-  date_format: "%Y%m%d"          # strftime format for filenames (YYYYMMDD)
+  date_format: "%Y%m%d"           # strftime format for filenames (YYYYMMDD)
 
 # Optional AI Prompt Extension
 # Add custom instructions to fine-tune extraction, e.g.:
