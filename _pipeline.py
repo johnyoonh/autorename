@@ -13,7 +13,6 @@ import shutil
 import sqlite3
 import time
 from dataclasses import asdict
-from pathlib import Path
 from typing import Iterable
 
 import yaml
@@ -83,7 +82,9 @@ def _audit_db_path(config: dict) -> str:
 class AuditStore:
     def __init__(self, path: str):
         self.path = path
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         self.db = sqlite3.connect(path)
         self.db.execute(
             """
@@ -160,6 +161,23 @@ def _canonical_category(value: str) -> str:
     return value.strip().casefold().replace(" ", "_").replace("-", "_")
 
 
+def _category_matches(category: str, rule: dict) -> bool:
+    """Match stable public categories against exact or human-friendly private aliases."""
+    normalized = _canonical_category(category)
+    values: list[str] = []
+    if rule.get("category") is not None:
+        values.append(str(rule["category"]))
+    aliases = rule.get("categories")
+    if isinstance(aliases, list):
+        values.extend(str(value) for value in aliases)
+
+    candidates = {_canonical_category(value) for value in values if str(value).strip()}
+    if normalized in candidates:
+        return True
+    tokens = set(normalized.split("_"))
+    return any(candidate in tokens for candidate in candidates if "_" not in candidate)
+
+
 def _file_is_stable(path: str, config: dict) -> tuple[bool, str | None]:
     seconds = int(config.get("normalization", {}).get("min_file_age_seconds", 30))
     if seconds <= 0:
@@ -182,8 +200,8 @@ def _embedded_ocr_state(path: str, config: dict) -> tuple[str, float, str]:
     return "needed", quality, "missing_or_low_quality_text"
 
 
-def _cached_extraction(path: str, quality: float) -> ExtractionResult:
-    max_pages = 3
+def _cached_extraction(path: str, quality: float, config: dict) -> ExtractionResult:
+    max_pages = int(config.get("pdf", {}).get("max_pages", 3))
     text, measured = extract_text(path, max_pages=max_pages)
     return ExtractionResult(text=text, quality_score=max(quality, measured), sources=["text"])
 
@@ -240,17 +258,18 @@ def process_document(
         state["sha256"] = digest
         ocr_status, embedded_quality, ocr_method = _embedded_ocr_state(path, config)
         state["ocr"].update(
-            {"status": ocr_status, "method": "ocrmypdf" if ocr_status == "ready" else ocr_method,
-             "text_quality": round(embedded_quality, 3)}
+            {
+                "status": ocr_status,
+                "method": "ocrmypdf" if ocr_status == "ready" else ocr_method,
+                "text_quality": round(embedded_quality, 3),
+            }
         )
         cached_metadata = store.get_metadata(digest, provider, model) if store else None
 
-    # A cache hit avoids repeated LLM/PaddleOCR work. We still inspected the
-    # actual PDF text layer above because OCR readiness is a property of the file.
     if cached_metadata is not None:
         metadata = cached_metadata
         state["cache"]["metadata_hit"] = True
-        extraction = _cached_extraction(path, embedded_quality)
+        extraction = _cached_extraction(path, embedded_quality, config)
     else:
         extraction = extract_content(path, config)
         if extraction.warnings:
@@ -310,8 +329,6 @@ def process_document(
 
     reasons = list(dict.fromkeys(reasons))
 
-    # Apply a safe rename only when the file itself is OCR-ready and metadata is
-    # accepted. Do not let the legacy numeric-suffix behavior resolve collisions.
     if apply and not canonical and not reasons and collision.kind == "none":
         undo_log = os.path.join(os.path.dirname(path), ".autorename-log.json")
         renamed = rename_invoice(
@@ -363,6 +380,12 @@ def _destination_for_state(state: dict, routing: dict) -> tuple[str | None, bool
     conf = float(state.get("classification", {}).get("confidence", 0.0) or 0.0)
     category = _canonical_category(str(state.get("classification", {}).get("category") or ""))
 
+    if bool(readiness.get("require_searchable_pdf", True)) and state.get("ocr", {}).get("status") != "ready":
+        ready = False
+        reasons.append("searchable_pdf_not_ready")
+    if bool(readiness.get("require_canonical_filename", True)) and not state.get("rename", {}).get("canonical"):
+        ready = False
+        reasons.append("canonical_filename_not_ready")
     if conf < required_conf:
         ready = False
         reasons.append("classification_below_routing_threshold")
@@ -370,7 +393,7 @@ def _destination_for_state(state: dict, routing: dict) -> tuple[str | None, bool
     destination_key = None
     if ready:
         for rule in routing.get("routes", []):
-            if _canonical_category(str(rule.get("category", ""))) == category:
+            if isinstance(rule, dict) and _category_matches(category, rule):
                 destination_key = rule.get("destination")
                 break
         if not destination_key:
@@ -388,6 +411,26 @@ def _destination_for_state(state: dict, routing: dict) -> tuple[str | None, bool
     return os.path.abspath(os.path.expanduser(os.path.expandvars(str(destination_path)))), ready, list(dict.fromkeys(reasons))
 
 
+def _append_routing_audit(routing: dict, result: dict, digest: str | None) -> None:
+    audit = routing.get("audit", {})
+    if not isinstance(audit, dict) or not bool(audit.get("enabled", False)):
+        return
+    raw_path = audit.get("path")
+    if not raw_path:
+        return
+    path = os.path.abspath(os.path.expanduser(os.path.expandvars(str(raw_path))))
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    record = {
+        "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "sha256": digest,
+        **result,
+    }
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+
+
 def route_document(state: dict, routing: dict, *, apply: bool = False, store: AuditStore | None = None) -> dict:
     """Route one already-verified state using private destination policy."""
     source = os.path.abspath(state["path"])
@@ -401,17 +444,17 @@ def route_document(state: dict, routing: dict, *, apply: bool = False, store: Au
     }
     if root is None:
         result["status"] = "review"
+        if store:
+            store.event("route", result, state.get("sha256"))
+        _append_routing_audit(routing, result, state.get("sha256"))
         return result
 
-    os.makedirs(root, exist_ok=True) if apply else None
     target = os.path.join(root, os.path.basename(source))
     result["destination"] = target
 
     if os.path.abspath(source) == os.path.abspath(target):
         result["status"] = "already_routed"
-        return result
-
-    if os.path.exists(target):
+    elif os.path.exists(target):
         collision = inspect_collision(source, target)
         if collision.kind == "duplicate":
             result["status"] = "duplicate"
@@ -419,9 +462,7 @@ def route_document(state: dict, routing: dict, *, apply: bool = False, store: Au
         else:
             result["status"] = "review"
             result["reasons"].append("destination_collision_different_content")
-        return result
-
-    if apply:
+    elif apply:
         os.makedirs(os.path.dirname(target), exist_ok=True)
         shutil.move(source, target)
         result["status"] = "routed" if normal_route else "moved_to_review"
@@ -429,8 +470,10 @@ def route_document(state: dict, routing: dict, *, apply: bool = False, store: Au
     else:
         result["status"] = "planned" if normal_route else "planned_review"
 
+    result["reasons"] = list(dict.fromkeys(result["reasons"]))
     if store:
         store.event("route", result, state.get("sha256"))
+    _append_routing_audit(routing, result, state.get("sha256"))
     return result
 
 
@@ -454,8 +497,15 @@ def process_paths(
             do_apply = apply if route_apply is None else route_apply
             for state in states:
                 if state.get("state") == "DEFERRED":
-                    routes.append({"source": state["path"], "status": "deferred", "destination": None,
-                                   "route_ready": False, "reasons": state["routing"]["reasons"]})
+                    routes.append(
+                        {
+                            "source": state["path"],
+                            "status": "deferred",
+                            "destination": None,
+                            "route_ready": False,
+                            "reasons": state["routing"]["reasons"],
+                        }
+                    )
                     continue
                 routes.append(route_document(state, routing, apply=do_apply, store=store))
         return {
