@@ -4,7 +4,7 @@ repository = "johnyoonh/autorename"
 [[commands]]
 name = "autorename"
 summary = "Normalize, classify, rename, and safely route document files"
-entrypoint = "autorename.py"
+entrypoint = "autorename"
 aliases = ["autorename-pdf"]
 capabilities = ["documents.normalize"]
 
