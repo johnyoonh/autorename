@@ -92,7 +92,24 @@ The process engine uses SQLite at `normalization.audit_db` (default `$HOME/.loca
 
 The actual PDF is still inspected for embedded text on every pass. Cached metadata only avoids repeated classification/LLM work when the content hash is unchanged. This keeps OCR readiness grounded in the current file while making an already-OCR'd, already-renamed repeat pass cheap.
 
-The database also records process and route events for provenance and debugging. It is not the authoritative proof that a file is searchable; the current PDF is.
+The SQLite database records process and route events for provenance and debugging. A private routing config can additionally request a JSONL route audit with:
+
+```yaml
+audit:
+  enabled: true
+  path: "${AUTORENAME_STATE_DIR}/routing.jsonl"
+```
+
+Neither audit store is authoritative proof that a file is searchable; the current PDF is.
+
+## Application config versus private routing config
+
+The new `process` and `route` commands deliberately separate the two configurations:
+
+- `--config` (also accepted as `--routing-config`) is the private destination/readiness policy.
+- `--app-config` is the AI/OCR configuration. If omitted, `AUTORENAME_APP_CONFIG` is checked, then the repository's `config.yaml` is used.
+
+The legacy `rename`, `organize`, `undo`, and `config` routes retain their previous argument behavior while compatibility migration is in progress.
 
 ## Preview and apply
 
@@ -102,10 +119,12 @@ Preview is the default:
 autorename process "$HOME/Documents/DocumentInbox/00_inbox"
 ```
 
-Apply OCR/rename changes:
+Apply OCR/rename changes while accepting the private routing policy contract used by scheduled wrappers:
 
 ```bash
-autorename process --apply "$HOME/Documents/DocumentInbox/00_inbox"
+autorename process "$HOME/Documents/DocumentInbox/00_inbox" \
+  --config "$HOME/.config/autorename/routing.yaml" \
+  --apply
 ```
 
 Recursive JSON output:
@@ -118,7 +137,7 @@ autorename process -r -o json "$HOME/Documents/DocumentInbox/00_inbox"
 
 ## Routing
 
-Routing is deliberately driven by a separate private YAML policy:
+Routing is driven by a separate private YAML policy. Rules support either one exact `category` or a list of human-friendly `categories` aliases. Composite public categories such as `finance_tax`, `identity_immigration`, and `vehicle_insurance` may therefore be matched by aliases such as `finance`, `identity`, or `vehicle`.
 
 ```yaml
 version: 1
@@ -129,7 +148,7 @@ readiness:
 fallback:
   destination: review
 routes:
-  - category: education
+  - categories: [education, academic]
     destination: records_education
 destinations:
   records_education:
@@ -141,24 +160,27 @@ destinations:
 Preview routing only:
 
 ```bash
-autorename route --routing-config "$HOME/.config/autorename/routing.yaml" "$HOME/Documents/DocumentInbox/00_inbox"
+autorename route "$HOME/Documents/DocumentInbox/00_inbox" \
+  --config "$HOME/.config/autorename/routing.yaml"
 ```
 
 Apply routing:
 
 ```bash
-autorename route --apply --routing-config "$HOME/.config/autorename/routing.yaml" "$HOME/Documents/DocumentInbox/00_inbox"
+autorename route "$HOME/Documents/DocumentInbox/00_inbox" \
+  --config "$HOME/.config/autorename/routing.yaml" \
+  --apply
 ```
 
-For a single periodic ingestion job, process and route in one invocation:
+A single scheduler may call `process` and then `route` sequentially under one lock. Alternatively the CLI can combine them in one invocation:
 
 ```bash
-autorename process --apply --route \
-  --routing-config "$HOME/.config/autorename/routing.yaml" \
-  "$HOME/Documents/DocumentInbox/00_inbox"
+autorename process "$HOME/Documents/DocumentInbox/00_inbox" \
+  --config "$HOME/.config/autorename/routing.yaml" \
+  --apply --route
 ```
 
-That avoids independent OCR, rename, and route watchers racing one another.
+Both patterns avoid independent OCR, rename, and route daemons racing one another.
 
 ## Review gate
 
@@ -183,6 +205,8 @@ Typical review reasons include:
 - `filename_collision_different_content`
 - `classification_below_processing_threshold`
 - `classification_below_routing_threshold`
+
+`REVIEW`, `DUPLICATE`, and `DEFERRED` are safe document states rather than process-command failures. This allows a scheduled wrapper to continue to the routing phase and apply its configured Review destination. Operational routing failures such as an unresolved destination or different-content destination collision remain nonzero conditions.
 
 ## Duplicate policy
 
