@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import runpy
 import sys
 
@@ -18,6 +19,7 @@ from _pipeline import AuditStore, collect_pdfs, load_routing_config, process_doc
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_ROUTING_CONFIG = "~/.config/autorename/routing.yaml"
+_UNRESOLVED_ENV = re.compile(r"\$(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*)")
 
 
 def _shared(parser: argparse.ArgumentParser) -> None:
@@ -93,11 +95,30 @@ def _config(args: argparse.Namespace) -> tuple[dict, str]:
     return config, config_path
 
 
+def _validate_routing_paths(routing: dict) -> None:
+    unresolved: list[str] = []
+    for name, destination in routing.get("destinations", {}).items():
+        if not isinstance(destination, dict):
+            continue
+        value = str(destination.get("path") or "")
+        if _UNRESOLVED_ENV.search(value):
+            unresolved.append(f"destinations.{name}.path={value}")
+    audit = routing.get("audit", {})
+    if isinstance(audit, dict) and bool(audit.get("enabled", False)):
+        value = str(audit.get("path") or "")
+        if value and _UNRESOLVED_ENV.search(value):
+            unresolved.append(f"audit.path={value}")
+    if unresolved:
+        raise RuntimeError("Unresolved environment variable in routing config: " + "; ".join(unresolved))
+
+
 def _routing(args: argparse.Namespace) -> dict:
     path = os.path.abspath(os.path.expanduser(args.routing_config))
     if not os.path.isfile(path):
         raise RuntimeError(f"Could not load routing config: {path}")
-    return load_routing_config(path)
+    routing = load_routing_config(path)
+    _validate_routing_paths(routing)
+    return routing
 
 
 def _summary(payload: dict) -> None:
