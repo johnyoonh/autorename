@@ -14,7 +14,7 @@ This repository owns deterministic document-processing behavior:
 - process/readiness state;
 - generic routing mechanics and audit/cache storage.
 
-Private destination mappings, machine paths, and scheduling do not belong here. Supply them through a routing file such as `~/.config/autorename/routing.yaml`, normally owned by private dotfiles.
+Private destination mappings, machine paths, and scheduling do not belong here. Supply them through a routing file such as `$HOME/.config/autorename/routing.yaml`, normally owned by private dotfiles.
 
 ## State machine
 
@@ -51,7 +51,7 @@ A private route policy may impose a stricter classification threshold than the g
 
 ```json
 {
-  "path": "/path/to/20260909 USCIS Biometrics Appointment Notice.pdf",
+  "path": "/path/to/20260909 Example University Enrollment Confirmation.pdf",
   "sha256": "...",
   "state": "ROUTE_READY",
   "ocr": {
@@ -63,10 +63,10 @@ A private route policy may impose a stricter classification threshold than the g
     "status": "ready",
     "changed": false,
     "canonical": true,
-    "proposed_name": "20260909 USCIS Biometrics Appointment Notice.pdf"
+    "proposed_name": "20260909 Example University Enrollment Confirmation.pdf"
   },
   "classification": {
-    "category": "identity_immigration",
+    "category": "education",
     "confidence": 0.97
   },
   "routing": {
@@ -84,11 +84,11 @@ The project distinguishes two jobs:
 - `normalization.persistent_ocr`: external OCRmyPDF writes a searchable text layer into the PDF when needed.
 - `pdf.ocr`: PaddleOCR can temporarily help the metadata model understand a scan. It does not itself make the source PDF searchable.
 
-A ScanSnap profile that already produces a good searchable PDF should pass the embedded-text check and skip OCRmyPDF.
+A scanner profile that already produces a good searchable PDF should pass the embedded-text check and skip OCRmyPDF.
 
 ## Metadata cache and audit
 
-The process engine uses SQLite at `normalization.audit_db` (default `~/.local/share/autorename/audit.sqlite3`). It is keyed by SHA-256 plus AI provider/model.
+The process engine uses SQLite at `normalization.audit_db` (default `$HOME/.local/share/autorename/audit.sqlite3`). It is keyed by SHA-256 plus AI provider/model.
 
 The actual PDF is still inspected for embedded text on every pass. Cached metadata only avoids repeated classification/LLM work when the content hash is unchanged. This keeps OCR readiness grounded in the current file while making an already-OCR'd, already-renamed repeat pass cheap.
 
@@ -99,19 +99,19 @@ The database also records process and route events for provenance and debugging.
 Preview is the default:
 
 ```bash
-autorename process ~/Documents/DocumentInbox/00_inbox
+autorename process "$HOME/Documents/DocumentInbox/00_inbox"
 ```
 
 Apply OCR/rename changes:
 
 ```bash
-autorename process --apply ~/Documents/DocumentInbox/00_inbox
+autorename process --apply "$HOME/Documents/DocumentInbox/00_inbox"
 ```
 
 Recursive JSON output:
 
 ```bash
-autorename process -r -o json ~/Documents/DocumentInbox/00_inbox
+autorename process -r -o json "$HOME/Documents/DocumentInbox/00_inbox"
 ```
 
 `normalization.min_file_age_seconds` protects against files that are still being copied or written by a scanner.
@@ -129,11 +129,11 @@ readiness:
 fallback:
   destination: review
 routes:
-  - category: identity_immigration
-    destination: google_records_identity
+  - category: education
+    destination: records_education
 destinations:
-  google_records_identity:
-    path: "${DOCUMENTS_GOOGLE}/10_identity"
+  records_education:
+    path: "${DOCUMENTS_ROOT}/30_education"
   review:
     path: "${DOCUMENT_INBOX}/90_review"
 ```
@@ -141,21 +141,21 @@ destinations:
 Preview routing only:
 
 ```bash
-autorename route --routing-config ~/.config/autorename/routing.yaml ~/Documents/DocumentInbox/00_inbox
+autorename route --routing-config "$HOME/.config/autorename/routing.yaml" "$HOME/Documents/DocumentInbox/00_inbox"
 ```
 
 Apply routing:
 
 ```bash
-autorename route --apply --routing-config ~/.config/autorename/routing.yaml ~/Documents/DocumentInbox/00_inbox
+autorename route --apply --routing-config "$HOME/.config/autorename/routing.yaml" "$HOME/Documents/DocumentInbox/00_inbox"
 ```
 
 For a single periodic ingestion job, process and route in one invocation:
 
 ```bash
 autorename process --apply --route \
-  --routing-config ~/.config/autorename/routing.yaml \
-  ~/Documents/DocumentInbox/00_inbox
+  --routing-config "$HOME/.config/autorename/routing.yaml" \
+  "$HOME/Documents/DocumentInbox/00_inbox"
 ```
 
 That avoids independent OCR, rename, and route watchers racing one another.
