@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import _pipeline
 from _normalization import NormalizationMetadata, PersistentOcrResult, ReviewAssessment
 from _pdf_utils import ExtractionResult
@@ -30,20 +28,20 @@ def _config():
             "min_confidence": 0.85,
             "min_file_age_seconds": 0,
             "persistent_ocr": "auto",
-            "categories": ["identity_immigration", "education", "other"],
+            "categories": ["education", "other"],
         },
         "output": {"date_format": "%Y%m%d"},
     }
 
 
 def test_process_uses_cached_metadata_and_marks_ready(monkeypatch, tmp_path):
-    pdf = tmp_path / "20260909 USCIS Biometrics Appointment Notice.pdf"
+    pdf = tmp_path / "20260909 Example University Enrollment Confirmation.pdf"
     pdf.write_bytes(b"synthetic")
     metadata = NormalizationMetadata(
-        organization="USCIS",
+        organization="Example University",
         document_date="09.09.2026",
-        document_type="Biometrics Appointment Notice",
-        category="identity_immigration",
+        document_type="Enrollment Confirmation",
+        category="education",
         confidence=0.97,
     )
     store = FakeStore(metadata)
@@ -72,27 +70,27 @@ def test_process_uses_cached_metadata_and_marks_ready(monkeypatch, tmp_path):
     assert state["state"] == "ROUTE_READY"
     assert state["ocr"]["status"] == "ready"
     assert state["rename"]["canonical"] is True
-    assert state["classification"]["category"] == "identity_immigration"
+    assert state["classification"]["category"] == "education"
     assert state["routing"]["ready"] is True
     assert state["cache"]["metadata_hit"] is True
 
 
 def test_route_uses_symbolic_category_destination(tmp_path):
-    source = tmp_path / "20260909 USCIS Notice.pdf"
+    source = tmp_path / "20260909 Example University Confirmation.pdf"
     source.write_bytes(b"content")
-    destination_root = tmp_path / "identity"
+    destination_root = tmp_path / "education"
     state = {
         "path": str(source),
         "sha256": "abc",
-        "classification": {"category": "identity_immigration", "confidence": 0.97},
+        "classification": {"category": "education", "confidence": 0.97},
         "routing": {"ready": True, "needs_review": False, "reasons": []},
     }
     routing = {
         "readiness": {"minimum_classification_confidence": 0.90},
         "fallback": {"destination": "review"},
-        "routes": [{"category": "identity_immigration", "destination": "identity"}],
+        "routes": [{"category": "education", "destination": "education"}],
         "destinations": {
-            "identity": {"path": str(destination_root)},
+            "education": {"path": str(destination_root)},
             "review": {"path": str(tmp_path / "review")},
         },
     }
