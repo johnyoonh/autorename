@@ -90,3 +90,30 @@ def test_review_states_do_not_abort_process_wrapper(monkeypatch, tmp_path):
 
     args = autorename.build_parser().parse_args(["process", "/tmp/inbox", "--apply"])
     assert autorename._run_process(args) == 0
+
+
+def test_combined_process_preserves_operational_route_failure(monkeypatch, tmp_path):
+    app_config = tmp_path / "config.yaml"
+    app_config.write_text("stub", encoding="utf-8")
+
+    monkeypatch.setattr(
+        autorename,
+        "_config",
+        lambda args: ({"normalization": {}, "ai": {}, "pdf": {}}, str(app_config)),
+    )
+    monkeypatch.setattr(autorename, "_routing", lambda args: {"routes": [], "destinations": {}})
+    monkeypatch.setattr(
+        autorename,
+        "process_paths",
+        lambda *args, **kwargs: {
+            "schema": 1,
+            "apply": True,
+            "total": 1,
+            "route_enabled": True,
+            "states": [{"state": "ROUTE_READY", "path": "/tmp/document.pdf", "ocr": {}, "rename": {}, "classification": {}, "routing": {"reasons": []}}],
+            "routes": [{"status": "review", "source": "/tmp/document.pdf", "destination": None, "reasons": ["destination_collision_different_content"]}],
+        },
+    )
+
+    args = autorename.build_parser().parse_args(["process", "/tmp/inbox", "--apply", "--route"])
+    assert autorename._run_process(args) == 5
