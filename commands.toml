@@ -1,0 +1,39 @@
+schema = 1
+repository = "johnyoonh/autorename"
+
+[[commands]]
+name = "autorename"
+summary = "Normalize, classify, rename, and safely route document files"
+entrypoint = "autorename"
+aliases = ["autorename-pdf"]
+capabilities = ["documents.normalize"]
+
+[[commands.routes]]
+path = ["process"]
+summary = "Verify or apply searchable OCR, canonical naming, classification, and route readiness"
+capability = "documents.process"
+
+[[commands.routes]]
+path = ["route"]
+summary = "Route files only after current readiness verification"
+capability = "documents.route"
+
+[[commands.routes]]
+path = ["rename"]
+summary = "Rename PDFs from extracted document metadata"
+capability = "documents.rename"
+
+[[commands.routes]]
+path = ["organize"]
+summary = "Run the backward-compatible Downloads aging workflow"
+capability = "documents.organize"
+
+[[commands.routes]]
+path = ["undo"]
+summary = "Undo recorded rename batches"
+capability = "documents.rename.undo"
+
+[[commands.routes]]
+path = ["config"]
+summary = "Inspect and validate autorename configuration"
+capability = "documents.config"
