@@ -10,3 +10,4 @@ pypdfium2>=4.30.0
 PyYAML>=6.0.2
 rapidfuzz>=3.9.0
 rich>=13.8.0
+fpdf2>=2.8.0

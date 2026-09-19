@@ -12,7 +12,8 @@ from _pdf_utils import extract_text, assess_text_quality, render_pages_to_images
 from _pdf_utils import (
     _mojibake_marker_count, _maybe_fix_mojibake,
     _get_bridge_script_path, _get_paddleocr_python,
-    _paddleocr_available, ocr_with_paddleocr,
+    _paddleocr_available, ocr_with_paddleocr, ocr_pages_detailed,
+    is_searchable_pdf, ocr_pdf_to_searchable,
 )
 
 
@@ -469,3 +470,80 @@ class TestOCRConfigPassthrough:
         assert "736" in cmd
         assert "--cpu-threads" in cmd
         assert "4" in cmd
+
+
+class TestIsSearchablePdf:
+    def test_scanned_pdf_not_searchable(self, fixture_image_invoice):
+        is_searchable, quality, text = is_searchable_pdf(fixture_image_invoice, threshold=0.3)
+        assert not is_searchable
+        assert quality < 0.3
+        assert text == ""
+
+    def test_text_pdf_searchable(self, fixture_text_invoice):
+        is_searchable, quality, text = is_searchable_pdf(fixture_text_invoice, threshold=0.3)
+        assert is_searchable
+        assert quality >= 0.3
+        assert len(text) > 0
+
+    def test_custom_threshold(self, fixture_text_invoice):
+        # A threshold of 1.1 cannot be satisfied
+        is_searchable, _, _ = is_searchable_pdf(fixture_text_invoice, threshold=1.1)
+        assert not is_searchable
+
+
+class TestOcrPdfToSearchable:
+    def test_paddleocr_unavailable_returns_error(self, tmp_path, fixture_image_invoice):
+        out = str(tmp_path / "out.pdf")
+        with patch("_pdf_utils._paddleocr_available", return_value=False):
+            res = ocr_pdf_to_searchable(fixture_image_invoice, out, config={})
+            assert not res["success"]
+            assert "not installed" in res["error"] or "not found" in res["error"]
+
+    def test_zero_pages_returns_error(self, tmp_path, empty_pdf):
+        out = str(tmp_path / "out.pdf")
+        with patch("_pdf_utils._paddleocr_available", return_value=True), \
+             patch("pypdfium2.PdfDocument.__len__", return_value=0):
+            res = ocr_pdf_to_searchable(empty_pdf, out, config={})
+            assert not res["success"]
+            assert "0 pages" in res["error"]
+
+    def test_searchable_pdf_created_with_invisible_text(self, tmp_path, fixture_image_invoice):
+        out = str(tmp_path / "searchable_springfield.pdf")
+        mock_results = [{
+            "status": "ok",
+            "text": "INVOICE #99 Springfield Power Co.",
+            "lines": [
+                {"text": "INVOICE #99", "box": [50, 50, 200, 80]},
+                {"text": "Springfield Power Co.", "box": [50, 90, 300, 120]},
+            ]
+        }]
+        with patch("_pdf_utils._paddleocr_available", return_value=True), \
+             patch("_pdf_utils.ocr_pages_detailed", return_value=mock_results):
+            res = ocr_pdf_to_searchable(fixture_image_invoice, out, config={})
+            assert res["success"]
+            assert res["pages_processed"] == 1
+            assert os.path.isfile(out)
+            searchable, quality, text = is_searchable_pdf(out, threshold=0.3)
+            assert searchable
+            assert "INVOICE #99" in text
+            assert "Springfield Power Co." in text
+
+    def test_in_place_replacement(self, tmp_path, fixture_image_invoice):
+        import shutil
+        target = str(tmp_path / "in_place_test.pdf")
+        shutil.copy2(fixture_image_invoice, target)
+
+        mock_results = [{
+            "status": "ok",
+            "text": "OVERWRITTEN IN PLACE",
+            "lines": [{"text": "OVERWRITTEN IN PLACE", "box": [10, 10, 100, 30]}]
+        }]
+        with patch("_pdf_utils._paddleocr_available", return_value=True), \
+             patch("_pdf_utils.ocr_pages_detailed", return_value=mock_results):
+            res = ocr_pdf_to_searchable(target, target, config={})
+            assert res["success"]
+            assert os.path.isfile(target)
+            searchable, _, text = is_searchable_pdf(target, threshold=0.1)
+            assert searchable
+            assert "OVERWRITTEN IN PLACE" in text
+

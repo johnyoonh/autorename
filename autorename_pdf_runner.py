@@ -32,6 +32,8 @@ ErrorResult = _mod.ErrorResult
 UndoFileResult = _mod.UndoFileResult
 UndoResult = _mod.UndoResult
 UndoBatchListResult = _mod.UndoBatchListResult
+OCRFileResult = _mod.OCRFileResult
+OCRBatchResult = _mod.OCRBatchResult
 
 # Re-export ExitCode from _utils (also available via autorename_pdf module)
 from _utils import ExitCode

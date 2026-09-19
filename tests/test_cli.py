@@ -30,6 +30,7 @@ _validate_config = _mod._validate_config
 _handle_config = _mod._handle_config
 _handle_rename = _mod._handle_rename
 _handle_undo = _mod._handle_undo
+_handle_ocr = _mod._handle_ocr
 _main = _mod.main
 get_base_directory = _mod.get_base_directory
 
@@ -67,6 +68,39 @@ class TestBuildParser:
         parser = build_parser()
         args = parser.parse_args(["undo"])
         assert args.subcommand == "undo"
+
+    def test_ocr_subcommand_defaults(self):
+        parser = build_parser()
+        args = parser.parse_args(["ocr", "file.pdf"])
+        assert args.subcommand == "ocr"
+        assert args.paths == ["file.pdf"]
+        assert args.in_place is False
+        assert args.output_dir is None
+        assert args.force is False
+        assert args.quality_threshold == 0.3
+        assert args.max_pages == 0
+        assert args.dry_run is False
+        assert args.recursive is False
+
+    def test_ocr_subcommand_options(self):
+        parser = build_parser()
+        args = parser.parse_args([
+            "ocr", "folder", "-r", "--in-place", "--force",
+            "--threshold", "0.5", "--max-pages", "5", "--dry-run"
+        ])
+        assert args.subcommand == "ocr"
+        assert args.recursive is True
+        assert args.in_place is True
+        assert args.force is True
+        assert args.quality_threshold == 0.5
+        assert args.max_pages == 5
+        assert args.dry_run is True
+
+    def test_rename_save_ocr_flag(self):
+        parser = build_parser()
+        args = parser.parse_args(["rename", "file.pdf", "--save-ocr"])
+        assert args.subcommand == "rename"
+        assert args.save_ocr is True
 
     def test_organize_defaults_to_preview(self):
         parser = build_parser()
@@ -1105,3 +1139,67 @@ class TestGetBaseDirectory:
             with patch.object(sys, "executable", "/path/to/autorename-pdf.exe"):
                 result = get_base_directory(None)
         assert result == "/path/to"
+
+
+class TestOcrSubcommand:
+    """Test the ocr subcommand handler and dispatch."""
+
+    def test_no_paths_exits_usage_error(self):
+        args = argparse.Namespace(paths=[], config_path=None, quiet=True, dry_run=False)
+        with pytest.raises(SystemExit) as exc_info:
+            _handle_ocr(args, "json")
+        assert exc_info.value.code == ExitCode.USAGE_ERROR
+
+    def test_paddleocr_unavailable_exits_config_error(self, tmp_path):
+        dummy_pdf = str(tmp_path / "test.pdf")
+        with open(dummy_pdf, "wb") as f:
+            f.write(b"%PDF-1.4 test")
+        args = argparse.Namespace(
+            paths=[dummy_pdf], config_path=None, quiet=True, dry_run=False,
+            force=False, quality_threshold=0.3, max_pages=0, output_dir=None, in_place=True, recursive=False,
+        )
+        with patch("autorename_pdf._paddleocr_available", return_value=False):
+            with pytest.raises(SystemExit) as exc_info:
+                _handle_ocr(args, "json")
+        assert exc_info.value.code == ExitCode.CONFIG_ERROR
+
+    def test_dry_run_skips_searchable_pdf(self, fixture_text_invoice, capsys):
+        args = argparse.Namespace(
+            paths=[fixture_text_invoice], config_path=None, quiet=True, dry_run=True,
+            force=False, quality_threshold=0.3, max_pages=0, output_dir=None, in_place=True, recursive=False,
+        )
+        with patch("autorename_pdf._paddleocr_available", return_value=True):
+            with pytest.raises(SystemExit) as exc_info:
+                _handle_ocr(args, "json")
+        assert exc_info.value.code == ExitCode.SUCCESS
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert data["total"] == 1
+        assert data["skipped"] == 1
+        assert data["processed"] == 0
+        assert data["files"][0]["status"] == "skipped"
+
+    def test_dry_run_plans_non_searchable_pdf(self, fixture_image_invoice, capsys):
+        args = argparse.Namespace(
+            paths=[fixture_image_invoice], config_path=None, quiet=True, dry_run=True,
+            force=False, quality_threshold=0.3, max_pages=0, output_dir=None, in_place=True, recursive=False,
+        )
+        with patch("autorename_pdf._paddleocr_available", return_value=True):
+            with pytest.raises(SystemExit) as exc_info:
+                _handle_ocr(args, "json")
+        assert exc_info.value.code == ExitCode.SUCCESS
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert data["total"] == 1
+        assert data["skipped"] == 0
+        assert data["processed"] == 1
+        assert data["files"][0]["status"] == "planned"
+
+    @patch("autorename_pdf._handle_ocr")
+    @patch("autorename_pdf.setup_logging")
+    def test_routes_ocr(self, mock_log, mock_handler):
+        mock_handler.side_effect = SystemExit(0)
+        with patch("sys.argv", ["prog", "ocr", "scan.pdf"]):
+            with pytest.raises(SystemExit):
+                _main()
+        mock_handler.assert_called_once()

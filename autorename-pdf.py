@@ -21,7 +21,12 @@ from rich.console import Console
 
 from _config_loader import load_yaml_config
 from _ai_processing import extract_metadata
-from _pdf_utils import extract_content
+from _pdf_utils import (
+    extract_content,
+    is_searchable_pdf,
+    ocr_pdf_to_searchable,
+    _paddleocr_available,
+)
 from _document_processing import (
     harmonize_company_name,
     parse_document_date,
@@ -160,6 +165,45 @@ class UndoBatchListResult:
 
     def to_json(self) -> str:
         return json.dumps({"batches": self.batches}, indent=2, ensure_ascii=True)
+
+
+@dataclass
+class OCRFileResult:
+    """Result of OCR pre-processing a single PDF file."""
+    file: str
+    status: str  # "processed", "skipped", "planned", "failed"
+    output_path: Optional[str] = None
+    quality_before: float = 0.0
+    quality_after: Optional[float] = None
+    pages: int = 0
+    error: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
+class OCRBatchResult:
+    """Result of an OCR batch operation."""
+    success: bool
+    total: int
+    processed: int
+    skipped: int
+    failed: int
+    dry_run: bool = False
+    files: list[OCRFileResult] = field(default_factory=list)
+
+    def to_json(self) -> str:
+        d = {
+            "success": self.success,
+            "total": self.total,
+            "processed": self.processed,
+            "skipped": self.skipped,
+            "failed": self.failed,
+            "dry_run": self.dry_run,
+            "files": [f.to_dict() for f in self.files],
+        }
+        return json.dumps(d, indent=2, ensure_ascii=True)
 
 
 # ---------------------------------------------------------------------------
@@ -334,6 +378,7 @@ def process_pdf(
     dry_run: bool = False,
     output: Console | None = None,
     batch_id: str = None,
+    save_ocr: bool = False,
 ) -> FileResult:
     """Process a single PDF file. Returns a FileResult with status and metadata."""
     logging.info(f"Processing {pdf_path}")
@@ -370,6 +415,15 @@ def process_pdf(
                 _step(output, "\u2717", "red", "No content extracted")
             result.error = "No content extracted"
             return result
+
+        if save_ocr and "ocr" in extraction.sources and not dry_run:
+            logging.info(f"Persisting OCR text layer into {pdf_path}")
+            ocr_save_res = ocr_pdf_to_searchable(pdf_path, pdf_path, config)
+            if ocr_save_res.get("success"):
+                if output:
+                    _step(output, "\u2713", "green", "Saved OCR text layer into PDF")
+            else:
+                logging.warning(f"Failed to persist OCR text layer: {ocr_save_res.get('error')}")
 
         # Step 2: AI metadata extraction
         metadata = extract_metadata(extraction, config)
@@ -425,13 +479,17 @@ def process_pdf(
 # Argument parser with subcommands
 # ---------------------------------------------------------------------------
 
-_KNOWN_SUBCOMMANDS = {"rename", "organize", "undo", "config"}
+_KNOWN_SUBCOMMANDS = {"rename", "organize", "undo", "config", "ocr"}
 
 EPILOG = """\
 examples:
   autorename-pdf invoice.pdf                Rename a single PDF
   autorename-pdf *.pdf --dry-run            Preview renames without changes
   autorename-pdf ./invoices -r              Recursively process a folder
+  autorename-pdf ocr scan.pdf               OCR a single scanned PDF in-place
+  autorename-pdf ocr ./scans -r             Recursively OCR all non-searchable PDFs
+  autorename-pdf ocr ./scans -d ./out       Output OCR'd PDFs to a target directory
+  autorename-pdf ocr *.pdf --dry-run        Check which PDFs need OCR without modifying
   autorename-pdf organize ~/Downloads       Preview organization of old files
   autorename-pdf organize ~/Downloads --apply  Rename and move eligible files
   autorename-pdf -o json *.pdf              JSON output (for scripting)
@@ -534,6 +592,55 @@ def build_parser() -> argparse.ArgumentParser:
     rename_parser.add_argument(
         "--ocr", action="store_true",
         help="Enable PaddleOCR (requires installation via setup.ps1)"
+    )
+    rename_parser.add_argument(
+        "--save-ocr", action="store_true",
+        help="When PaddleOCR runs during rename, embed the OCR text layer into the PDF",
+    )
+
+    # --- ocr subcommand ---
+    ocr_parser = subparsers.add_parser(
+        "ocr",
+        parents=[_shared],
+        help="Convert non-searchable PDFs into searchable PDFs with embedded OCR text",
+        description=(
+            "Detect PDFs lacking a searchable text layer, run OCR via PaddleOCR, "
+            "and embed an invisible text layer with bounding boxes. "
+            "Supports batch pre-processing before downstream organization or renaming."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    ocr_parser.add_argument(
+        "paths", nargs="*", default=[],
+        help="PDF files or folders to process",
+    )
+    ocr_parser.add_argument(
+        "--in-place", action="store_true", default=False,
+        help="Overwrite original PDF files in place (default if --output-dir is omitted)",
+    )
+    ocr_parser.add_argument(
+        "-d", "--output-dir", default=None,
+        help="Directory to write searchable PDFs (default: overwrite in-place)",
+    )
+    ocr_parser.add_argument(
+        "--force", action="store_true", default=False,
+        help="Force OCR even if the PDF already has a searchable text layer",
+    )
+    ocr_parser.add_argument(
+        "--threshold", "--quality-threshold", dest="quality_threshold", type=float, default=0.3,
+        help="Text quality threshold (0.0-1.0) below which PDF is considered non-searchable (default: 0.3)",
+    )
+    ocr_parser.add_argument(
+        "--max-pages", type=int, default=0,
+        help="Maximum pages to OCR per document (0 = all pages, default: 0)",
+    )
+    ocr_parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Preview which files need OCR without creating or modifying files",
+    )
+    ocr_parser.add_argument(
+        "--recursive", "-r", action="store_true",
+        help="Process folders recursively",
     )
 
     organize_parser = subparsers.add_parser(
@@ -926,6 +1033,7 @@ def _handle_rename(args: argparse.Namespace, output_format: str) -> None:
         file_result = process_pdf(
             pdf_path, config, yaml_path, undo_log_path,
             dry_run=dry_run, output=progress_con, batch_id=batch_id,
+            save_ocr=getattr(args, "save_ocr", False),
         )
         file_results.append(file_result)
 
@@ -1021,6 +1129,158 @@ def _handle_organize(args: argparse.Namespace, output_format: str) -> None:
             console.print(f"  {result.status:7} {result.source} -> {result.destination or 'Review'}")
 
 
+def _handle_ocr(args: argparse.Namespace, output_format: str) -> None:
+    """Handle the ocr subcommand."""
+    quiet = getattr(args, "quiet", False)
+    dry_run = getattr(args, "dry_run", False)
+    force = getattr(args, "force", False)
+    quality_threshold = getattr(args, "quality_threshold", 0.3)
+    max_pages = getattr(args, "max_pages", 0)
+    output_dir = getattr(args, "output_dir", None)
+    in_place = getattr(args, "in_place", False) or (output_dir is None)
+
+    base_dir = get_base_directory(getattr(args, "config_path", None))
+    config_path = os.path.join(base_dir, "config.yaml")
+    if getattr(args, "config_path", None):
+        config_path = args.config_path
+
+    config = load_yaml_config(config_path) or {}
+
+    paths = getattr(args, "paths", [])
+    if not paths:
+        error_exit(
+            "usage_error",
+            "No files or folders specified for OCR.",
+            suggestion="Usage: autorename-pdf ocr [options] <files_or_folders...>",
+            exit_code=ExitCode.USAGE_ERROR,
+            output_format=output_format,
+        )
+
+    if not _paddleocr_available(config):
+        error_exit(
+            "config_error",
+            "PaddleOCR environment is not installed or not found.",
+            suggestion="Run setup.ps1 (or setup.sh) to install PaddleOCR.",
+            exit_code=ExitCode.CONFIG_ERROR,
+            output_format=output_format,
+        )
+
+    recursive = getattr(args, "recursive", False)
+    pdf_files = collect_pdf_files(paths, recursive=recursive)
+    if not pdf_files:
+        error_exit(
+            "no_files",
+            "No PDF files found in the specified paths.",
+            exit_code=ExitCode.NO_FILES,
+            output_format=output_format,
+        )
+
+    show_text = (output_format == "text" and not quiet)
+    if show_text:
+        mode_str = "Dry run (preview only)" if dry_run else ("In-place" if in_place else f"Output to {output_dir}")
+        console.print(f"[bold]OCR Pre-processing[/bold] [dim]({mode_str}, threshold: {quality_threshold})[/]\n")
+
+    total = len(pdf_files)
+    processed = 0
+    skipped = 0
+    failed = 0
+    file_results: list[OCRFileResult] = []
+
+    for i, pdf_path in enumerate(pdf_files, 1):
+        filename = normalize_unicode(os.path.basename(pdf_path))
+        is_searchable, quality, _ = is_searchable_pdf(pdf_path, threshold=quality_threshold)
+
+        if is_searchable and not force:
+            skipped += 1
+            res = OCRFileResult(
+                file=normalize_unicode(os.path.abspath(pdf_path).replace("\\", "/")),
+                status="skipped",
+                quality_before=round(quality, 3),
+                quality_after=round(quality, 3),
+            )
+            file_results.append(res)
+            if show_text:
+                console.print(f"  [dim]\u00b7[/] [dim]{filename} (searchable, quality {quality:.2f}, skipped)[/]")
+            elif output_format == "json" and not quiet:
+                print(f"[{i}/{total}] {filename}: skipped (already searchable)", file=sys.stderr)
+            continue
+
+        dest_path = pdf_path if in_place else os.path.join(output_dir, filename)
+
+        if dry_run:
+            processed += 1
+            res = OCRFileResult(
+                file=normalize_unicode(os.path.abspath(pdf_path).replace("\\", "/")),
+                status="planned",
+                output_path=normalize_unicode(os.path.abspath(dest_path).replace("\\", "/")),
+                quality_before=round(quality, 3),
+            )
+            file_results.append(res)
+            if show_text:
+                console.print(f"  [yellow]~[/] [bold]{filename}[/] (quality {quality:.2f} -> planned OCR)")
+            elif output_format == "json" and not quiet:
+                print(f"[{i}/{total}] {filename}: planned OCR", file=sys.stderr)
+            continue
+
+        if show_text:
+            console.print(f"  [cyan]\u25b6[/] [bold]{filename}[/] (quality {quality:.2f} -> OCR running...)")
+        elif output_format == "json" and not quiet:
+            print(f"[{i}/{total}] {filename}: running OCR...", file=sys.stderr)
+
+        ocr_res = ocr_pdf_to_searchable(
+            pdf_path, dest_path, config, max_pages=max_pages
+        )
+
+        if ocr_res.get("success"):
+            processed += 1
+            new_quality = ocr_res.get("text_quality", 0.0)
+            pages = ocr_res.get("pages_processed", 0)
+            res = OCRFileResult(
+                file=normalize_unicode(os.path.abspath(pdf_path).replace("\\", "/")),
+                status="processed",
+                output_path=normalize_unicode(os.path.abspath(dest_path).replace("\\", "/")),
+                quality_before=round(quality, 3),
+                quality_after=round(new_quality, 3),
+                pages=pages,
+            )
+            file_results.append(res)
+            if show_text:
+                console.print(f"  [green]\u2713[/] [bold]{filename}[/] (quality {quality:.2f} -> {new_quality:.2f}, {pages} pages)")
+        else:
+            failed += 1
+            err_msg = ocr_res.get("error", "Unknown error")
+            res = OCRFileResult(
+                file=normalize_unicode(os.path.abspath(pdf_path).replace("\\", "/")),
+                status="failed",
+                quality_before=round(quality, 3),
+                error=err_msg,
+            )
+            file_results.append(res)
+            if show_text:
+                console.print(f"  [red]\u2717[/] [bold]{filename}[/] failed: {err_msg}")
+
+    batch_result = OCRBatchResult(
+        success=(failed == 0),
+        total=total,
+        processed=processed,
+        skipped=skipped,
+        failed=failed,
+        dry_run=dry_run,
+        files=file_results,
+    )
+
+    if output_format == "json":
+        print(batch_result.to_json())
+    else:
+        status_color = "green" if failed == 0 else "yellow"
+        console.print(
+            f"\n[{status_color}]OCR complete:[/{status_color}] "
+            f"{processed} processed, {skipped} skipped, {failed} failed (total {total})"
+        )
+
+    sys.exit(ExitCode.SUCCESS if failed == 0 else ExitCode.PARTIAL_FAILURE)
+
+
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -1058,6 +1318,8 @@ def main():
         _handle_organize(args, output_format)
     elif subcommand == "rename":
         _handle_rename(args, output_format)
+    elif subcommand == "ocr":
+        _handle_ocr(args, output_format)
     else:
         # No subcommand and no paths — show help
         parser.print_help()

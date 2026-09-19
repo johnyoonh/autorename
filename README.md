@@ -221,6 +221,12 @@ autorename-pdf-cli.exe --provider anthropic --model claude-sonnet-4-6 "file.pdf"
 # Enable vision and/or OCR
 autorename-pdf-cli.exe --vision --ocr "scanned_document.pdf"
 
+# Pre-process scanned PDFs into searchable PDFs in-place
+autorename-pdf-cli.exe ocr "C:\path\to\scans" -r
+
+# Preview which PDFs need OCR without modifying anything
+autorename-pdf-cli.exe ocr --dry-run "C:\path\to\scans" -r
+
 # JSON output (for scripting / GUI integration)
 autorename-pdf-cli.exe rename --output json "C:\path\to\folder"
 ```
@@ -257,6 +263,7 @@ applied run appends JSON Lines records to `.organize-log.jsonl` in the archive.
 | Subcommand | Description |
 |------------|-------------|
 | `rename` | Rename PDF files (default if omitted) |
+| `ocr` | Convert non-searchable PDFs into searchable PDFs with embedded text layer |
 | `undo` | Reverse file renames using the undo log |
 | `config show` | Display current configuration (API keys redacted) |
 | `config validate` | Validate configuration and report issues |
@@ -271,10 +278,24 @@ applied run appends JSON Lines records to `.organize-log.jsonl` in the archive.
 | `--model` | Override model from config |
 | `--vision` | Enable vision (send page images to LLM) |
 | `--ocr` | Enable PaddleOCR |
+| `--save-ocr` | When PaddleOCR runs during rename, embed the OCR text layer into the PDF |
 | `--text-only` | Disable OCR and vision (text extraction only) |
 | `--output`, `-o` | Output format: `text` or `json` (default: auto-detect) |
 | `--quiet`, `-q` | Suppress non-essential output |
 | `--verbose`, `-v` | Show detailed processing info |
+
+#### OCR Options
+
+| Flag | Description |
+|------|-------------|
+| `--in-place` | Overwrite original PDF files in place (default if `--output-dir` is omitted) |
+| `-d`, `--output-dir` | Target directory to write searchable PDFs |
+| `--force` | Force OCR even if the PDF already has an adequate text layer |
+| `--threshold`, `--quality-threshold` | Text quality threshold 0.0-1.0 (default: 0.3) |
+| `--max-pages` | Maximum pages to OCR per file (0 = all pages, default: 0) |
+| `--dry-run` | Preview which files need OCR without creating or modifying files |
+| `--recursive`, `-r` | Scan directories recursively |
+
 
 #### Undo Options
 

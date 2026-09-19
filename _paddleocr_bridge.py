@@ -137,12 +137,13 @@ def _init_v3(lang="en", device="auto", det_model=None, det_limit=736, cpu_thread
 
 
 def _extract_v3(ocr, path):
-    """PaddleOCR v3.x: .predict() yields result objects with rec_texts.
+    """PaddleOCR v3.x: .predict() yields result objects with rec_texts and rec_boxes.
 
-    v3.4+ nests results under a "res" key: data["res"]["rec_texts"].
+    v3.4+ nests results under a "res" key: data["res"]["rec_texts"], data["res"]["rec_boxes"].
     Earlier v3.x had rec_texts at the top level.
     """
     texts = []
+    lines = []
     for page_result in ocr.predict(input=path):
         if hasattr(page_result, "json"):
             data = page_result.json
@@ -153,8 +154,19 @@ def _extract_v3(ocr, path):
         # v3.4+: rec_texts is inside data["res"]
         # v3.0-3.3: rec_texts is at top level
         rec = data.get("res", data) if isinstance(data.get("res"), dict) else data
-        texts.extend(rec.get("rec_texts", []))
-    return texts
+        page_texts = rec.get("rec_texts", [])
+        page_boxes = rec.get("rec_boxes", [])
+        texts.extend(page_texts)
+        for i, t in enumerate(page_texts):
+            box = None
+            if i < len(page_boxes):
+                raw_box = page_boxes[i]
+                if hasattr(raw_box, "tolist"):
+                    box = raw_box.tolist()
+                elif isinstance(raw_box, (list, tuple)):
+                    box = [b.tolist() if hasattr(b, "tolist") else b for b in raw_box]
+            lines.append({"text": t, "box": box})
+    return texts, lines
 
 
 def main():
@@ -190,8 +202,8 @@ def main():
         if not path:
             continue
         try:
-            texts = _extract_v3(ocr, path)
-            print(json.dumps({"status": "ok", "text": "\n".join(texts)}), flush=True)
+            texts, lines = _extract_v3(ocr, path)
+            print(json.dumps({"status": "ok", "text": "\n".join(texts), "lines": lines}), flush=True)
         except Exception as e:
             print(json.dumps({"status": "error", "message": str(e)}), flush=True)
 

@@ -220,12 +220,27 @@ def _paddleocr_available(config: dict) -> bool:
     return _get_paddleocr_python(config) is not None
 
 
-def ocr_with_paddleocr(images: list[Image.Image], config: dict) -> str:
-    """Save images as temp files, pipe paths to bridge script, collect OCR text."""
+def is_searchable_pdf(pdf_path: str, threshold: float = 0.3, check_pages: int = 3) -> tuple[bool, float, str]:
+    """Check whether a PDF has an adequate embedded text layer.
+
+    Args:
+        pdf_path: Path to the PDF file.
+        threshold: Minimum text quality score (0.0 - 1.0) to be considered searchable.
+        check_pages: Number of pages to inspect.
+
+    Returns:
+        tuple of (is_searchable: bool, quality_score: float, extracted_text: str)
+    """
+    text, quality = extract_text(pdf_path, max_pages=check_pages)
+    return quality >= threshold, quality, text
+
+
+def ocr_pages_detailed(images: list[Image.Image], config: dict) -> list[dict]:
+    """Save images as temp files, pipe paths to bridge script, collect structured OCR results."""
     python = _get_paddleocr_python(config)
     if not python:
         logging.error("PaddleOCR python not found")
-        return ""
+        return []
 
     bridge_src = _get_bridge_script_path()
     paddleocr_cfg = config.get("paddleocr", {})
@@ -236,16 +251,9 @@ def ocr_with_paddleocr(images: list[Image.Image], config: dict) -> str:
     cpu_threads = paddleocr_cfg.get("cpu_threads", 4)
 
     tmp_dir = tempfile.mkdtemp(prefix="autorename_ocr_")
+    results = []
     try:
         # PyInstaller isolation: when frozen, the bridge script lives in _MEIPASS.
-        # Python adds the script's directory to sys.path[0], so _MEIPASS becomes
-        # sys.path[0] in the child process. The bundled socket.py/_socket.pyd then
-        # shadow the venv's stdlib, causing "python311.dll conflicts" on import.
-        # Fix: copy the bridge script to a clean temp dir so sys.path[0] is clean.
-        # Also reset SetDllDirectoryW (PyInstaller bootloader sets it to _MEIPASS,
-        # which is inherited by child processes).
-        # See: https://pyinstaller.org/en/stable/common-issues-and-pitfalls.html
-        # See: https://github.com/pyinstaller/pyinstaller/issues/3795
         meipass = getattr(sys, '_MEIPASS', None)
         env = os.environ.copy()
         if meipass:
@@ -284,9 +292,6 @@ def ocr_with_paddleocr(images: list[Image.Image], config: dict) -> str:
             env=env,
         )
 
-        # Stream stderr in background so model-download progress is visible.
-        # Lines about active model downloads are logged at WARNING level
-        # (always visible) so users see first-time model download progress.
         def _drain_stderr():
             for line in proc.stderr:
                 line = line.rstrip()
@@ -301,7 +306,6 @@ def ocr_with_paddleocr(images: list[Image.Image], config: dict) -> str:
         stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
         stderr_thread.start()
 
-        all_text = []
         for i, img in enumerate(images):
             tmp_path = os.path.join(tmp_dir, f"page_{i}.png")
             img.save(tmp_path)
@@ -311,14 +315,26 @@ def ocr_with_paddleocr(images: list[Image.Image], config: dict) -> str:
                 line = proc.stdout.readline()
                 if not line:
                     logging.warning(f"PaddleOCR bridge returned empty line for page {i + 1}")
+                    results.append({"status": "error", "message": "Empty response from bridge", "text": "", "lines": []})
                     continue
                 result = json.loads(line)
-                if result["status"] == "ok":
-                    all_text.append(f"Page {i + 1}:\n{result['text']}")
+                if result.get("status") == "ok":
+                    results.append({
+                        "status": "ok",
+                        "text": result.get("text", ""),
+                        "lines": result.get("lines", []),
+                    })
                 else:
                     logging.warning(f"PaddleOCR error on page {i + 1}: {result.get('message', 'unknown')}")
+                    results.append({
+                        "status": "error",
+                        "message": result.get("message", "unknown"),
+                        "text": "",
+                        "lines": [],
+                    })
             except (json.JSONDecodeError, BrokenPipeError, OSError) as e:
                 logging.warning(f"PaddleOCR bridge communication error on page {i + 1}: {e}")
+                results.append({"status": "error", "message": str(e), "text": "", "lines": []})
                 break  # Bridge is dead, no point sending more pages
 
         try:
@@ -334,7 +350,191 @@ def ocr_with_paddleocr(images: list[Image.Image], config: dict) -> str:
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
+    return results
+
+
+def ocr_with_paddleocr(images: list[Image.Image], config: dict) -> str:
+    """Save images as temp files, pipe paths to bridge script, collect OCR text."""
+    results = ocr_pages_detailed(images, config)
+    all_text = [
+        f"Page {i + 1}:\n{r['text']}"
+        for i, r in enumerate(results)
+        if r.get("status") == "ok" and r.get("text")
+    ]
     return "\n\n".join(all_text)
+
+
+def _load_unicode_font(pdf) -> str:
+    """Find and load an available Unicode TTF font in FPDF, returning the family name."""
+    candidates = [
+        ("C:/Windows/Fonts/malgun.ttf", "Malgun"),
+        ("C:/Windows/Fonts/arial.ttf", "Arial"),
+        ("C:/Windows/Fonts/segoeui.ttf", "SegoeUI"),
+        ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "DejaVuSans"),
+        ("/System/Library/Fonts/Supplemental/Arial.ttf", "Arial"),
+    ]
+    for path, family in candidates:
+        if os.path.isfile(path):
+            try:
+                pdf.add_font(family, "", path)
+                return family
+            except Exception as e:
+                logging.debug(f"Failed to load font candidate {path}: {e}")
+                continue
+    return "Helvetica"
+
+
+def ocr_pdf_to_searchable(
+    pdf_path: str,
+    output_path: str,
+    config: dict,
+    max_pages: int = 0,
+    scale: float = 2.0,
+) -> dict:
+    """Perform OCR on a PDF and save a new searchable PDF with invisible text overlay.
+
+    Args:
+        pdf_path: Path to source PDF.
+        output_path: Path to destination PDF (can be same as pdf_path for atomic replacement).
+        config: Configuration dictionary (paddleocr settings, etc.).
+        max_pages: Maximum pages to process (0 = all pages).
+        scale: Rendering scale for OCR and page background image (default 2.0).
+
+    Returns:
+        dict with keys:
+            "success": bool,
+            "pages_processed": int,
+            "total_pages": int,
+            "output_path": str,
+            "text_quality": float,
+            "error": str or None,
+    """
+    if not _paddleocr_available(config):
+        return {
+            "success": False,
+            "pages_processed": 0,
+            "total_pages": 0,
+            "output_path": output_path,
+            "text_quality": 0.0,
+            "error": "PaddleOCR is not installed or venv not found",
+        }
+
+    from fpdf import FPDF, TextMode
+
+    pdf_doc = None
+    stream = None
+    try:
+        stream = _open_pdf_stream(pdf_path)
+        pdf_doc = pdfium.PdfDocument(stream, autoclose=False)
+        total_pages = len(pdf_doc)
+        if total_pages == 0:
+            return {
+                "success": False,
+                "pages_processed": 0,
+                "total_pages": 0,
+                "output_path": output_path,
+                "text_quality": 0.0,
+                "error": "PDF has 0 pages",
+            }
+
+        pages_to_process = min(max_pages, total_pages) if max_pages > 0 else total_pages
+
+        page_images = []
+        page_sizes_pt = []
+        for i in range(pages_to_process):
+            page = pdf_doc[i]
+            w_pt, h_pt = page.get_size()
+            page_sizes_pt.append((w_pt, h_pt))
+            pil_img = page.render(scale=scale).to_pil()
+            page_images.append(pil_img)
+    finally:
+        if pdf_doc:
+            pdf_doc.close()
+        if stream:
+            stream.close()
+
+    ocr_results = ocr_pages_detailed(page_images, config)
+
+    tmp_dir = tempfile.mkdtemp(prefix="autorename_searchable_")
+    try:
+        pdf_out = FPDF(unit="pt")
+        font_family = _load_unicode_font(pdf_out)
+
+        for i, (pil_img, (w_pt, h_pt)) in enumerate(zip(page_images, page_sizes_pt)):
+            pdf_out.add_page(format=(w_pt, h_pt))
+
+            img_tmp_path = os.path.join(tmp_dir, f"page_bg_{i}.jpg")
+            pil_img.save(img_tmp_path, format="JPEG", quality=90)
+            pdf_out.image(img_tmp_path, x=0, y=0, w=w_pt, h=h_pt)
+
+            pdf_out.text_mode = TextMode.INVISIBLE
+            page_data = ocr_results[i] if i < len(ocr_results) else {}
+            lines = page_data.get("lines", [])
+
+            for line in lines:
+                text = line.get("text", "")
+                box = line.get("box")
+                if not text or not box:
+                    continue
+
+                if isinstance(box[0], (int, float)) and len(box) == 4:
+                    xmin, ymin, xmax, ymax = box
+                elif len(box) >= 4 and isinstance(box[0], (list, tuple)):
+                    xs = [p[0] for p in box]
+                    ys = [p[1] for p in box]
+                    xmin, ymin, xmax, ymax = min(xs), min(ys), max(xs), max(ys)
+                else:
+                    continue
+
+                x_pt = xmin / scale
+                y_pt = ymin / scale
+                w_box_pt = max((xmax - xmin) / scale, 1.0)
+                h_box_pt = max((ymax - ymin) / scale, 1.0)
+
+                font_size = max(4.0, min(h_box_pt * 0.85, 72.0))
+                pdf_out.set_font(font_family, size=font_size)
+                pdf_out.set_xy(x_pt, y_pt)
+
+                if font_family == "Helvetica":
+                    clean_text = text.encode("latin-1", "replace").decode("latin-1")
+                else:
+                    clean_text = text
+                pdf_out.cell(w=w_box_pt, h=h_box_pt, text=clean_text, border=0)
+
+        is_in_place = os.path.abspath(output_path) == os.path.abspath(pdf_path)
+        out_dir = os.path.dirname(os.path.abspath(output_path))
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+
+        if is_in_place:
+            temp_out = os.path.join(tmp_dir, "output.pdf")
+            pdf_out.output(temp_out)
+            os.replace(temp_out, output_path)
+        else:
+            pdf_out.output(output_path)
+
+        _, new_quality = extract_text(output_path, max_pages=min(pages_to_process, 3))
+
+        return {
+            "success": True,
+            "pages_processed": pages_to_process,
+            "total_pages": total_pages,
+            "output_path": output_path,
+            "text_quality": new_quality,
+            "error": None,
+        }
+    except Exception as e:
+        logging.error(f"Failed to generate searchable PDF for {pdf_path}: {e}")
+        return {
+            "success": False,
+            "pages_processed": 0,
+            "total_pages": total_pages if "total_pages" in locals() else 0,
+            "output_path": output_path,
+            "text_quality": 0.0,
+            "error": str(e),
+        }
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def _should_run_step(setting, quality: float, threshold: float) -> bool:
