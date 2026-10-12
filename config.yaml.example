@@ -6,7 +6,8 @@ ai:
   provider: "openai"              # openai, anthropic, gemini, xai, ollama
   model: "${OPENAI_EVERDAY_MODEL}" # OPENAI_EVERYDAY_MODEL also accepted
   api_key: "${OPENAI_API_KEY}"    # Not needed for ollama
-  api_key_source: "config"       # config, or bwa to read OPENAI_API_KEY from Bitwarden
+  api_key_source: "config"       # config, or bwa to read a key from Bitwarden
+  bwa_key: "OPENAI_API_KEY"      # bwa env field; e.g. OPENAI_AUTORENAME_API_KEY
   base_url: ""                    # Custom base URL (optional, for proxies)
   temperature: 0.0                # Compatible providers only; OpenAI uses model defaults
   max_retries: 2                  # OpenAI: bounded SDK retries for transient failures

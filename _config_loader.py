@@ -18,22 +18,24 @@ import yaml
 _ENV_VAR_PATTERN = re.compile(r"\$\{([^}]+)\}")
 
 
-def _openai_key_from_bwa() -> str:
+def _openai_key_from_bwa(name: str = "OPENAI_API_KEY") -> str:
     """Read one credential without evaluating shell output or logging secrets."""
+    if not isinstance(name, str) or not re.fullmatch(r"[A-Z_][A-Z0-9_]*", name):
+        raise ValueError("ai.bwa_key must be a valid environment variable name.")
     try:
         result = subprocess.run(
-            ["bwa", "env", "OPENAI_API_KEY"],
+            ["bwa", "env", name],
             stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30,
         )
     except (OSError, subprocess.TimeoutExpired):
         raise ValueError("Could not read OpenAI key from bwa; check installation and run bwa unlock.") from None
     if result.returncode != 0:
-        raise ValueError("Could not read OpenAI key from bwa; run bwa unlock and check OPENAI_API_KEY.")
+        raise ValueError("Could not read OpenAI key from bwa; run bwa unlock and check the configured bwa_key.")
     try:
         parts = shlex.split(result.stdout)
     except ValueError:
         parts = []
-    prefix = "OPENAI_API_KEY="
+    prefix = name + "="
     if len(parts) != 2 or parts[0] != "export" or not parts[1].startswith(prefix):
         raise ValueError("Invalid credential output from bwa.")
     key = parts[1][len(prefix):]
@@ -62,6 +64,7 @@ DEFAULTS = {
         "model": "gpt-5.4",
         "api_key": "",
         "api_key_source": "config",
+        "bwa_key": "OPENAI_API_KEY",
         "base_url": "",
         "temperature": 0.0,
         "max_retries": 2,
@@ -312,7 +315,7 @@ def load_yaml_config(config_path: str, *, provider: str | None = None) -> dict[s
                 env_key = os.environ.get("OPENAI_API_KEY")
                 env_model = os.environ.get("OPENAI_EVERDAY_MODEL") or os.environ.get("OPENAI_EVERYDAY_MODEL")
                 if source == "bwa":
-                    config["ai"]["api_key"] = _openai_key_from_bwa()
+                    config["ai"]["api_key"] = _openai_key_from_bwa(config["ai"]["bwa_key"])
                 elif env_key:
                     config["ai"]["api_key"] = env_key
                 if env_model:

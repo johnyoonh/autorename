@@ -471,3 +471,28 @@ def test_bwa_source_not_used_for_other_effective_provider(tmp_path, monkeypatch)
     monkeypatch.setattr(subprocess, 'run', run)
     result = load_yaml_config(str(path), provider='anthropic')
     assert result['ai']['api_key'] == 'configured-key'
+
+
+def test_bwa_uses_configured_app_specific_credential(tmp_path, monkeypatch):
+    import subprocess
+    path = tmp_path / 'config.yaml'
+    path.write_text('config_version: 2\nai:\n  provider: openai\n  api_key_source: bwa\n  bwa_key: OPENAI_AUTORENAME_API_KEY\n')
+    def run(command, **kwargs):
+        if command == ['bwa', 'env', 'OPENAI_AUTORENAME_API_KEY']:
+            return subprocess.CompletedProcess(command, 0, 'export OPENAI_AUTORENAME_API_KEY=synthetic-app-key\n', '')
+        return subprocess.CompletedProcess(command, 0, 'export OPENAI_API_KEY=synthetic-general-key\n', '')
+    monkeypatch.setattr(subprocess, 'run', run)
+    config = load_yaml_config(str(path))
+    assert config['ai']['api_key'] == 'synthetic-app-key'
+
+
+@pytest.mark.parametrize('name', ['', '-h', 'OPENAI_KEY;echo', ['OPENAI_KEY']])
+def test_bwa_rejects_invalid_credential_names_without_running(tmp_path, monkeypatch, name):
+    import subprocess
+    import yaml
+    path = tmp_path / 'config.yaml'
+    path.write_text(yaml.safe_dump({'ai': {'provider': 'openai', 'api_key_source': 'bwa', 'bwa_key': name}}))
+    def run(*args, **kwargs):
+        pytest.fail('invalid name must not invoke bwa')
+    monkeypatch.setattr(subprocess, 'run', run)
+    assert load_yaml_config(str(path)) is None
