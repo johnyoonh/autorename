@@ -9,6 +9,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from _document_processing import (
+    extract_source_timestamp,
     harmonize_company_name,
     parse_document_date,
     rename_invoice,
@@ -70,6 +71,30 @@ class TestParseDocumentDate:
         assert result is None
 
 
+class TestSourceTimestampExtraction:
+    def test_extracts_normalized_screenshot_timestamp(self):
+        dt, token = extract_source_timestamp("screenshot_2024-01-02_14-21-44.png")
+        assert dt == datetime.datetime(2024, 1, 2, 14, 21, 44)
+        assert token == "20240102_142144"
+
+    def test_extracts_macos_screenshot_timestamp(self):
+        dt, token = extract_source_timestamp("Screenshot 2024-01-02 at 2.21.44 PM.png")
+        assert dt == datetime.datetime(2024, 1, 2, 14, 21, 44)
+        assert token == "20240102_142144"
+
+    def test_extracts_duplicate_marker(self):
+        dt, token = extract_source_timestamp("Screenshot 2024-01-02 at 2.21.44 PM (2).png")
+        assert dt == datetime.datetime(2024, 1, 2, 14, 21, 44)
+        assert token == "20240102_142144_2"
+
+    def test_extracts_timestamp_from_descriptive_screenshot_name(self):
+        dt, token = extract_source_timestamp(
+            "screenshot_2024-01-02_14-21-44_acme-benefits-summary.png"
+        )
+        assert dt == datetime.datetime(2024, 1, 2, 14, 21, 44)
+        assert token == "20240102_142144"
+
+
 class TestRenameInvoice:
     def test_basic_rename(self, tmp_path, sample_config):
         pdf_path = str(tmp_path / "original.pdf")
@@ -81,6 +106,18 @@ class TestRenameInvoice:
         )
         assert result is not None
         assert "20240315 ACME ER.pdf" in result
+        assert os.path.exists(result)
+
+    def test_image_extension_is_preserved(self, tmp_path, sample_config):
+        image_path = str(tmp_path / "receipt.png")
+        with open(image_path, 'w') as f:
+            f.write("fake image")
+
+        result = rename_invoice(
+            image_path, "ACME", datetime.date(2024, 3, 15), "Receipt", sample_config
+        )
+        assert result is not None
+        assert result.endswith("20240315 ACME Receipt.png")
         assert os.path.exists(result)
 
     def test_dry_run(self, tmp_path, sample_config):
@@ -122,6 +159,21 @@ class TestRenameInvoice:
         assert result is not None
         assert "_(1)" in result
 
+    def test_duplicate_handling_preserves_image_extension(self, tmp_path, sample_config):
+        image_path = str(tmp_path / "receipt.png")
+        existing = str(tmp_path / "20240315 ACME Receipt.png")
+        with open(image_path, 'w') as f:
+            f.write("fake image 1")
+        with open(existing, 'w') as f:
+            f.write("fake image 2")
+
+        result = rename_invoice(
+            image_path, "ACME", datetime.date(2024, 3, 15), "Receipt", sample_config
+        )
+        assert result is not None
+        assert result.endswith("20240315 ACME Receipt_(1).png")
+        assert os.path.exists(result)
+
     def test_invalid_company_name_sanitized(self, tmp_path, sample_config):
         """Forbidden chars are stripped, keeping the usable portion."""
         pdf_path = str(tmp_path / "original.pdf")
@@ -135,7 +187,7 @@ class TestRenameInvoice:
         assert "InvalidName" in result
 
     def test_fully_invalid_company_name(self, tmp_path, sample_config):
-        """Company name with only forbidden chars falls back to Unknown."""
+        """Company name with only forbidden chars is omitted by default."""
         pdf_path = str(tmp_path / "original.pdf")
         with open(pdf_path, 'w') as f:
             f.write("fake pdf")
@@ -144,7 +196,8 @@ class TestRenameInvoice:
             pdf_path, '<>:"/\\|?*', datetime.date(2024, 3, 15), "ER", sample_config
         )
         assert result is not None
-        assert "Unknown" in result
+        assert "Unknown" not in result
+        assert result.endswith("20240315 ER.pdf")
 
     def test_no_date(self, tmp_path, sample_config):
         pdf_path = str(tmp_path / "original.pdf")
@@ -156,6 +209,40 @@ class TestRenameInvoice:
         )
         assert result is not None
         assert "00000000" in result
+
+    def test_image_uses_source_timestamp_when_ai_date_missing(self, tmp_path, sample_config):
+        image_path = str(tmp_path / "screenshot_2024-01-02_14-21-44.png")
+        with open(image_path, 'w') as f:
+            f.write("fake image")
+
+        result = rename_invoice(
+            image_path, "", None, "Intuit Compensation Package", sample_config
+        )
+        assert result is not None
+        assert result.endswith(
+            "20240102_142144 Intuit Compensation Package.png"
+        )
+
+    def test_image_omits_unknown_company(self, tmp_path, sample_config):
+        image_path = str(tmp_path / "screenshot_2024-01-02_14-21-44.png")
+        with open(image_path, 'w') as f:
+            f.write("fake image")
+
+        result = rename_invoice(
+            image_path, "Unknown", None, "Eyeglasses Style Advice", sample_config
+        )
+        assert result is not None
+        assert "Unknown" not in os.path.basename(result)
+        assert result.endswith("20240102_142144 Eyeglasses Style Advice.png")
+
+    def test_image_skips_weak_screenshot_description(self, tmp_path, sample_config):
+        image_path = str(tmp_path / "screenshot_2024-01-02_14-21-44.png")
+        with open(image_path, 'w') as f:
+            f.write("fake image")
+
+        result = rename_invoice(image_path, "", None, "General Screenshot", sample_config)
+        assert result is None
+        assert os.path.exists(image_path)
 
     def test_undo_log_written(self, tmp_path, sample_config):
         pdf_path = str(tmp_path / "original.pdf")

@@ -7,6 +7,8 @@ __pycache__/
 /Releases/
 config.yaml
 harmonized-company-names.yaml
+root-structure.yaml
+*.organization-index.sqlite*
 *.pdf
 *.spec
 *.zip
@@ -25,3 +27,7 @@ gui/dist/
 gui/src-tauri/target/
 gui/assets/css/output.css
 gui/src-tauri/autorename-pdf-cli-*.exe
+
+# Local agent guidance is kept out of public pushes.
+/AGENTS.md
+/CLAUDE.md

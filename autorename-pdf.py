@@ -21,7 +21,7 @@ from rich.console import Console
 
 from _config_loader import load_yaml_config
 from _ai_processing import extract_metadata
-from _pdf_utils import extract_content
+from _pdf_utils import IMAGE_EXTENSIONS, extract_content
 from _document_processing import (
     harmonize_company_name,
     parse_document_date,
@@ -51,6 +51,7 @@ _configure_stdio_utf8()
 
 # Constants
 PDF_EXTENSION = ".pdf"
+SUPPORTED_EXTENSIONS = {PDF_EXTENSION, *IMAGE_EXTENSIONS}
 UNDO_LOG_NAME = ".autorename-log.json"
 
 console = Console()
@@ -67,6 +68,7 @@ class FileResult:
     new_name: Optional[str] = None
     new_path: Optional[str] = None
     error: Optional[str] = None
+    error_type: Optional[str] = None
     warnings: list = field(default_factory=list)
     company: Optional[str] = None
     date: Optional[str] = None
@@ -284,28 +286,32 @@ def get_base_directory(config_path: str | None = None):
 # File collection
 # ---------------------------------------------------------------------------
 
+def _is_supported_document(filename: str) -> bool:
+    return os.path.splitext(filename)[1].lower() in SUPPORTED_EXTENSIONS
+
+
 def collect_pdf_files(input_paths: list, recursive: bool = False) -> list:
-    """Collect all PDF files from input paths."""
+    """Collect all supported PDF and image files from input paths."""
     pdf_files = []
     for input_path in input_paths:
         # Strip trailing quotes/backslashes mangled by Windows shell escaping
         # e.g. "C:\folder\" becomes C:\folder" due to \" escape
         input_path = normalize_unicode(input_path.strip('"').rstrip('\\').rstrip('/'))
         if os.path.isfile(input_path):
-            if input_path.lower().endswith(PDF_EXTENSION):
+            if _is_supported_document(input_path):
                 pdf_files.append(input_path)
             else:
-                logging.warning(f"Not a PDF: {input_path}")
+                logging.warning(f"Not a supported PDF/image file: {input_path}")
         elif os.path.isdir(input_path):
             if recursive:
                 for root, _, files in os.walk(input_path):
                     for f in files:
-                        if f.lower().endswith(PDF_EXTENSION):
+                        if _is_supported_document(f):
                             pdf_files.append(os.path.join(root, f))
             else:
                 for f in os.listdir(input_path):
                     fp = os.path.join(input_path, f)
-                    if os.path.isfile(fp) and f.lower().endswith(PDF_EXTENSION):
+                    if os.path.isfile(fp) and _is_supported_document(f):
                         pdf_files.append(fp)
         else:
             logging.error(f"Not a valid file or folder: {input_path}")
@@ -359,6 +365,10 @@ def process_pdf(
             _step(output, "\u2713", "green", "Text extracted", f"quality {q}")
             if "ocr" in extraction.sources:
                 _step(output, "\u2713", "green", "PaddleOCR")
+            if "apple_vision_ocr" in extraction.sources:
+                _step(output, "\u2713", "green", "Apple Vision OCR")
+            if "apple_vision_classification" in extraction.sources:
+                _step(output, "\u2713", "green", "Apple Vision classification")
             if "vision" in extraction.sources:
                 _step(output, "\u2713", "green", "Vision", "page images")
             for w in extraction.warnings:
@@ -413,6 +423,15 @@ def process_pdf(
         return result
 
     except Exception as e:
+        if getattr(e, "status_code", None) in (401, 403):
+            result.error_type = "auth_error"
+            result.error = f"{provider} authorization failed (HTTP {e.status_code}). Check the API key and project model-request permissions."
+            if provider == "openai":
+                result.error += " Set OPENAI_API_KEY; Model capabilities Request (model.request) must be allowed."
+            logging.error(result.error)
+            if output:
+                _step(output, "\u2717", "red", result.error)
+            return result
         logging.error(f"Error processing {pdf_path}: {e}")
         logging.debug(traceback.format_exc())
         if output:
@@ -429,26 +448,28 @@ _KNOWN_SUBCOMMANDS = {"rename", "organize", "undo", "config"}
 
 EPILOG = """\
 examples:
-  autorename-pdf invoice.pdf                Rename a single PDF
-  autorename-pdf *.pdf --dry-run            Preview renames without changes
-  autorename-pdf ./invoices -r              Recursively process a folder
-  autorename-pdf organize ~/Downloads       Preview organization of old files
-  autorename-pdf organize ~/Downloads --apply  Rename and move eligible files
-  autorename-pdf -o json *.pdf              JSON output (for scripting)
-  autorename-pdf undo                       Reverse last rename
-  autorename-pdf config show                Show current config (keys redacted)
-  autorename-pdf config validate            Validate config file
+  autorename invoice.pdf                    Rename a single PDF
+  autorename receipt.jpg --dry-run          Preview an image rename
+  autorename *.pdf --dry-run                Preview renames without changes
+  autorename ./invoices -r                  Recursively process a folder
+  autorename organize run ~/Downloads       Preview Downloads organization
+  autorename organize intake ~/Downloads   Surface newly downloaded duplicates
+  autorename organize index                 Refresh the cloud-root catalog
+  autorename organize status                Show catalog status
+  autorename -o json *.pdf                  JSON output (for scripting)
+  autorename undo                           Reverse last rename
+  autorename config show                    Show current config (keys redacted)
 """
 
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the argument parser with subcommands."""
     parser = argparse.ArgumentParser(
-        prog="autorename-pdf",
+        prog="autorename",
         description=(
-            "AI-powered PDF auto-renamer. Extracts company name, date, and "
-            "document type from PDFs using an LLM, renames files to "
-            "YYYYMMDD COMPANY DOCTYPE.pdf format.\n\n"
+            "AI-powered document auto-renamer. Extracts company name, date, and "
+            "document type from PDFs and images using OCR/vision plus an LLM, "
+            "then renames files to YYYYMMDD COMPANY DOCTYPE.ext format.\n\n"
             "Supports --output json for structured output suitable for "
             "scripting and GUI integration."
         ),
@@ -499,13 +520,13 @@ def build_parser() -> argparse.ArgumentParser:
     rename_parser = subparsers.add_parser(
         "rename",
         parents=[_shared],
-        help="Rename PDF files (default subcommand)",
-        description="Rename PDF files using AI-extracted metadata.",
+        help="Rename PDF/image files (default subcommand)",
+        description="Rename PDF and image files using AI-extracted metadata.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     rename_parser.add_argument(
         "paths", nargs="*", default=[],
-        help="PDF files or folders to process"
+        help="PDF/image files or folders to process"
     )
     rename_parser.add_argument(
         "--dry-run", action="store_true",
@@ -539,14 +560,35 @@ def build_parser() -> argparse.ArgumentParser:
     organize_parser = subparsers.add_parser(
         "organize",
         parents=[_shared],
-        help="Rename and archive files aging out of Downloads",
-        description="Preview or apply organization of top-level files older than a threshold.",
+        help="Index cloud roots and organize Downloads",
+        description="Index approved roots, then deduplicate, flatten, group, and place Downloads.",
     )
-    organize_parser.add_argument("source", nargs="?", default=os.path.expanduser("~/Downloads"))
-    organize_parser.add_argument("--destination", default=os.path.expanduser("~/Archives/Downloads"))
-    organize_parser.add_argument("--older-than", type=int, default=30, metavar="DAYS")
-    organize_parser.add_argument("--apply", action="store_true", help="Apply changes (default is preview only)")
-    organize_parser.add_argument("--skip-pdf-renaming", action="store_true")
+    organize_sub = organize_parser.add_subparsers(dest="organize_action")
+    organize_run = organize_sub.add_parser("run", parents=[_shared], help="Preview or apply organization")
+    organize_run.add_argument("source", nargs="?", default=os.path.expanduser("~/Downloads"))
+    organize_run.add_argument("--destination", default=os.path.expanduser("~/Archives/Downloads"))
+    organize_run.add_argument("--older-than", type=int, default=30, metavar="DAYS")
+    organize_run.add_argument("--maximum", type=int, default=None, metavar="FILES")
+    organize_run.add_argument("--root-structure", default=None, metavar="PATH")
+    organize_run.add_argument("--index-path", default=None, metavar="PATH")
+    organize_run.add_argument("--apply", action="store_true", help="Apply changes (default is preview only)")
+    organize_run.add_argument("--skip-pdf-renaming", action="store_true")
+    organize_intake = organize_sub.add_parser("intake", parents=[_shared], help="Surface settled duplicates")
+    organize_intake.add_argument("source", nargs="?", default=os.path.expanduser("~/Downloads"))
+    organize_intake.add_argument("--settle-seconds", type=int, default=60, metavar="SECONDS")
+    organize_intake.add_argument("--maximum", type=int, default=None, metavar="FILES")
+    organize_intake.add_argument("--root-structure", default=None, metavar="PATH")
+    organize_intake.add_argument("--index-path", default=None, metavar="PATH")
+    organize_intake.add_argument("--apply", action="store_true")
+    organize_index = organize_sub.add_parser("index", parents=[_shared], help="Refresh configured roots")
+    organize_index.add_argument("root_ids", nargs="*")
+    organize_index.add_argument("--root-structure", default=None, metavar="PATH")
+    organize_index.add_argument("--index-path", default=None, metavar="PATH")
+    organize_status = organize_sub.add_parser("status", parents=[_shared], help="Show catalog status")
+    organize_status.add_argument("--index-path", default=None, metavar="PATH")
+    organize_undo = organize_sub.add_parser("undo", parents=[_shared], help="Undo an organization run")
+    organize_undo.add_argument("run_id")
+    organize_undo.add_argument("--log-path", default=None, metavar="PATH")
 
     # --- undo subcommand ---
     undo_parser = subparsers.add_parser(
@@ -599,7 +641,7 @@ def _preprocess_argv(argv: list[str] | None = None) -> list[str]:
     """Preprocess sys.argv to inject 'rename' subcommand when needed.
 
     If no known subcommand is found among the arguments, prepend 'rename'
-    so that `autorename-pdf file.pdf` and `autorename-pdf -o json file.pdf`
+    so that `autorename file.pdf` and `autorename -o json file.pdf`
     both work as expected.
     """
     if argv is None:
@@ -622,6 +664,13 @@ def _preprocess_argv(argv: list[str] | None = None) -> list[str]:
             continue
         # Found a positional argument
         if arg in _KNOWN_SUBCOMMANDS:
+            if arg == "organize":
+                actions = {"run", "intake", "index", "status", "undo"}
+                next_arg = argv[i + 1] if i + 1 < len(argv) else None
+                if next_arg in {"-h", "--help"}:
+                    return argv
+                if next_arg not in actions:
+                    return argv[:i + 1] + ["run"] + argv[i + 1:]
             return argv  # subcommand already present
         else:
             # First positional is not a subcommand — inject 'rename'
@@ -840,7 +889,7 @@ def _handle_rename(args: argparse.Namespace, output_format: str) -> None:
         config_path = args.config_path
 
     # Load config
-    config = load_yaml_config(config_path)
+    config = load_yaml_config(config_path, provider=getattr(args, "provider", None))
     if not config:
         error_exit(
             "config_error",
@@ -869,7 +918,7 @@ def _handle_rename(args: argparse.Namespace, output_format: str) -> None:
         error_exit(
             "usage_error",
             "No files or folders specified.",
-            suggestion="Usage: autorename-pdf [options] <files_or_folders...>",
+            suggestion="Usage: autorename [options] <files_or_folders...>",
             exit_code=ExitCode.USAGE_ERROR,
             output_format=output_format,
         )
@@ -879,7 +928,7 @@ def _handle_rename(args: argparse.Namespace, output_format: str) -> None:
     if not pdf_files:
         error_exit(
             "no_files",
-            "No PDF files found in the specified paths.",
+            "No supported PDF/image files found in the specified paths.",
             exit_code=ExitCode.NO_FILES,
             output_format=output_format,
         )
@@ -904,6 +953,7 @@ def _handle_rename(args: argparse.Namespace, output_format: str) -> None:
         console.print("[bold]Dry run[/bold] [dim]no files will be renamed[/]\n")
 
     total = len(pdf_files)
+    auth_failed = False
     for i, pdf_path in enumerate(pdf_files, 1):
         filename = normalize_unicode(os.path.basename(pdf_path))
         if show_text:
@@ -925,10 +975,22 @@ def _handle_rename(args: argparse.Namespace, output_format: str) -> None:
         else:
             failed += 1
 
+        if file_result.error_type == "auth_error":
+            auth_failed = True
+            for remaining in pdf_files[i:]:
+                file_results.append(FileResult(
+                    file=normalize_unicode(os.path.abspath(remaining).replace("\\", "/")),
+                    status="failed", error_type="not_attempted",
+                    error="Not attempted because provider authorization failed.",
+                    provider=config["ai"]["provider"], model=config["ai"]["model"],
+                ))
+                failed += 1
+            break
+
     # When every file was skipped (already correctly named), write an empty
     # batch so that a subsequent "undo" targets this no-op batch instead of
     # silently reverting an earlier rename run.
-    if renamed == 0 and skipped > 0 and undo_log_path and batch_id:
+    if renamed == 0 and failed == 0 and skipped > 0 and undo_log_path and batch_id:
         write_empty_batch(undo_log_path, batch_id)
 
     batch = BatchResult(
@@ -959,6 +1021,8 @@ def _handle_rename(args: argparse.Namespace, output_format: str) -> None:
                 parts.append(f"[red]{failed} failed[/]")
             console.print(f"\n[bold]Done:[/bold] {', '.join(parts)}")
 
+    if auth_failed:
+        sys.exit(ExitCode.AUTH_ERROR)
     if failed > 0 and failed < total:
         sys.exit(ExitCode.PARTIAL_FAILURE)
     elif failed == total:
@@ -967,9 +1031,87 @@ def _handle_rename(args: argparse.Namespace, output_format: str) -> None:
 
 
 def _handle_organize(args: argparse.Namespace, output_format: str) -> None:
-    """Preview or apply the Downloads aging workflow."""
+    """Index roots or preview/apply the Downloads workflow."""
     from pathlib import Path
-    from _downloads_organizer import append_audit_log, organize_files
+    from _downloads_organizer import (
+        append_audit_log, deduplicate_intake, organize_files, organize_indexed, undo_organization,
+    )
+    from _organization_index import OrganizationIndex, load_root_structure
+
+    if sys.platform == "darwin":
+        app_data = Path.home() / "Library" / "Application Support" / "autorename"
+    elif sys.platform == "win32":
+        app_data = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "autorename"
+    else:
+        app_data = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "autorename"
+    base_dir = Path(get_base_directory(getattr(args, "config_path", None)))
+    config_path = getattr(args, "config_path", None) or os.path.join(str(base_dir), "config.yaml")
+    config = load_yaml_config(config_path)
+    organizer_config = (config or {}).get("organize", {})
+    root_structure_path = Path(getattr(args, "root_structure", None) or base_dir / "root-structure.yaml").expanduser()
+    index_path = Path(getattr(args, "index_path", None) or app_data / "organization-index.sqlite").expanduser()
+    log_path = Path(getattr(args, "log_path", None) or app_data / "organization-actions.jsonl").expanduser()
+    action = getattr(args, "organize_action", "run")
+
+    if action == "status":
+        with OrganizationIndex(index_path) as index:
+            payload = index.status()
+        print(json.dumps(payload, indent=2))
+        return
+
+    if action == "undo":
+        messages = undo_organization(log_path, args.run_id)
+        payload = {"run_id": args.run_id, "restored": len(messages), "messages": messages}
+        if output_format == "json":
+            print(json.dumps(payload, indent=2))
+        else:
+            console.print(f"[bold]Restored:[/bold] {len(messages)} action(s) from {args.run_id}")
+        return
+
+    roots = destinations = None
+    if root_structure_path.is_file():
+        roots, destinations = load_root_structure(root_structure_path)
+    elif action == "index":
+        error_exit("config_error", f"Root structure not found: {root_structure_path}",
+                   exit_code=ExitCode.CONFIG_ERROR, output_format=output_format)
+
+    if action == "index":
+        requested = set(args.root_ids) or None
+        known = {root.id for root in roots}
+        if requested and not requested <= known:
+            unknown = ", ".join(sorted(requested - known))
+            error_exit("usage_error", f"Unknown root id(s): {unknown}",
+                       exit_code=ExitCode.USAGE_ERROR, output_format=output_format)
+        with OrganizationIndex(index_path) as index:
+            refreshed = index.refresh(roots, requested)
+            payload = {"refreshed": refreshed, **index.status()}
+        print(json.dumps(payload, indent=2))
+        return
+
+    if action == "intake":
+        if roots is None:
+            error_exit("config_error", f"Root structure not found: {root_structure_path}",
+                       exit_code=ExitCode.CONFIG_ERROR, output_format=output_format)
+        source = Path(args.source).expanduser().resolve()
+        if not source.is_dir() or args.settle_seconds < 0:
+            error_exit("usage_error", "Source must be a directory and settle time cannot be negative.",
+                       exit_code=ExitCode.USAGE_ERROR, output_format=output_format)
+        with OrganizationIndex(index_path) as index:
+            known_roots = {item["root_id"] for item in index.status()["roots"]}
+            missing_roots = {root.id for root in roots} - known_roots
+            if missing_roots:
+                index.refresh(roots, missing_roots)
+            run_id, results = deduplicate_intake(
+                source, roots, index, args.apply, args.settle_seconds,
+                args.maximum or int(organizer_config.get("maximum_files", 100)), log_path,
+            )
+        payload = {"run_id": run_id, "apply": args.apply, "total": len(results),
+                   "duplicates": len(results), "files": [asdict(item) for item in results]}
+        if output_format == "json":
+            print(json.dumps(payload, indent=2))
+        else:
+            console.print(f"[bold]Intake:[/bold] {len(results)} exact duplicate(s)")
+        return
 
     source = Path(args.source).expanduser().resolve()
     destination = Path(args.destination).expanduser().resolve()
@@ -979,10 +1121,7 @@ def _handle_organize(args: argparse.Namespace, output_format: str) -> None:
 
     pdf_renamer = None
     if not args.skip_pdf_renaming:
-        base_dir = get_base_directory(getattr(args, "config_path", None))
-        config_path = getattr(args, "config_path", None) or os.path.join(base_dir, "config.yaml")
-        config = load_yaml_config(config_path)
-        yaml_path = os.path.join(base_dir, "harmonized-company-names.yaml")
+        yaml_path = os.path.join(str(base_dir), "harmonized-company-names.yaml")
         if config:
             def pdf_renamer(path: Path, apply: bool):
                 result = process_pdf(str(path), config, yaml_path, None, dry_run=not apply)
@@ -991,10 +1130,26 @@ def _handle_organize(args: argparse.Namespace, output_format: str) -> None:
                 new_path = Path(result.new_path) if result.new_path else path
                 return new_path, result.doc_type, None
 
-    results = organize_files(source, destination, args.older_than, args.apply, pdf_renamer)
-    audit = destination / ".organize-log.jsonl"
-    append_audit_log(audit, results, args.apply)
-    payload = {"apply": args.apply, "source": str(source), "destination": str(destination),
+    run_id = None
+    if roots is not None:
+        with OrganizationIndex(index_path) as index:
+            known_roots = {item["root_id"] for item in index.status()["roots"]}
+            missing_roots = {root.id for root in roots} - known_roots
+            if missing_roots:
+                index.refresh(roots, missing_roots)
+            run_id, results = organize_indexed(
+                source, roots, destinations, index, args.older_than, args.apply,
+                args.maximum or int(organizer_config.get("maximum_files", 100)),
+                log_path=log_path, pdf_renamer=pdf_renamer,
+                recognition_backends=organizer_config.get("recognition_backends", []),
+                recognition_timeout=int(organizer_config.get("recognition_timeout", 60)),
+            )
+        audit = log_path
+    else:
+        results = organize_files(source, destination, args.older_than, args.apply, pdf_renamer)
+        audit = destination / ".organize-log.jsonl"
+        append_audit_log(audit, results, args.apply)
+    payload = {"run_id": run_id, "apply": args.apply, "source": str(source), "destination": str(destination),
                "older_than_days": args.older_than, "total": len(results),
                "moved": sum(r.status == "moved" for r in results),
                "planned": sum(r.status == "planned" for r in results),
@@ -1028,11 +1183,11 @@ def main():
         if output_format == "text":
             console.print(
                 "[yellow]Warning:[/yellow] --undo is deprecated. "
-                "Use [bold]autorename-pdf undo[/bold] instead."
+                "Use [bold]autorename undo[/bold] instead."
             )
         else:
             print(json.dumps({
-                "warning": "--undo is deprecated. Use 'autorename-pdf undo' instead."
+                "warning": "--undo is deprecated. Use 'autorename undo' instead."
             }), file=sys.stderr)
         _handle_undo(args, output_format)
         return

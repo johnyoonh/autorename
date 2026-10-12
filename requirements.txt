@@ -2,7 +2,7 @@ anthropic>=0.39.0
 dateparser>=1.2.0
 python-dotenv>=1.0.0
 instructor>=1.7.0
-openai>=1.43.0
+openai>=2.32.0
 pdfplumber>=0.11.0
 Pillow>=10.4.0
 pydantic>=2.8.0
@@ -10,3 +10,6 @@ pypdfium2>=4.30.0
 PyYAML>=6.0.2
 rapidfuzz>=3.9.0
 rich>=13.8.0
+pyobjc-framework-CoreML>=11.0; sys_platform == "darwin"
+pyobjc-framework-Quartz>=11.0; sys_platform == "darwin"
+pyobjc-framework-Vision>=11.0; sys_platform == "darwin"

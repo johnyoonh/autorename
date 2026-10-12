@@ -9,6 +9,7 @@ import json
 import logging
 import datetime
 import time
+import re
 
 import dateparser
 from rapidfuzz.distance import JaroWinkler
@@ -18,6 +19,25 @@ from _config_loader import load_company_names
 
 # Constants
 CONFIDENCE_THRESHOLD = 0.85
+IMAGE_EXTENSIONS = {
+    ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".gif", ".webp", ".heic", ".heif"
+}
+WEAK_COMPONENTS = {
+    "",
+    "unknown",
+    "n/a",
+    "na",
+    "none",
+    "null",
+}
+WEAK_IMAGE_DESCRIPTIONS = {
+    "image",
+    "screenshot",
+    "screen shot",
+    "general screenshot",
+    "generic screenshot",
+    "unknown screenshot",
+}
 
 
 def harmonize_company_name(company_name: str, yaml_path: str, config: dict | None = None) -> str:
@@ -59,6 +79,74 @@ def parse_document_date(date_str: str) -> datetime.date | None:
     return None
 
 
+def extract_source_timestamp(path: str) -> tuple[datetime.datetime | None, str | None]:
+    """Extract a timestamp already present in common screenshot filenames.
+
+    Returns a datetime plus a normalized filename token that preserves time-of-day.
+    The token is intentionally useful for image filenames, e.g.
+    ``20240102_142144``.
+    """
+    name = os.path.basename(path)
+    stem = os.path.splitext(name)[0]
+
+    normalized = re.match(
+        r"^screenshot_(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})(_\d+)?(?:[_ -].*)?$",
+        stem,
+        flags=re.IGNORECASE,
+    )
+    if normalized:
+        date, hour, minute, second, duplicate = normalized.groups()
+        try:
+            dt = datetime.datetime.strptime(
+                f"{date} {hour}:{minute}:{second}", "%Y-%m-%d %H:%M:%S"
+            )
+        except ValueError:
+            return None, None
+        compact_date = date.replace("-", "")
+        return dt, f"{compact_date}_{hour}{minute}{second}{duplicate or ''}"
+
+    mac = re.match(
+        r"^(?:Screen Shot|Screenshot) (\d{4}-\d{2}-\d{2}) at "
+        r"(\d{1,2})\.(\d{2})\.(\d{2}) (AM|PM)(?: \((\d+)\))?$",
+        stem,
+        flags=re.IGNORECASE,
+    )
+    if mac:
+        date, hour, minute, second, ampm, duplicate = mac.groups()
+        hour_int = int(hour)
+        if ampm.upper() == "AM" and hour_int == 12:
+            hour_int = 0
+        elif ampm.upper() == "PM" and hour_int != 12:
+            hour_int += 12
+        try:
+            dt = datetime.datetime.strptime(
+                f"{date} {hour_int:02d}:{minute}:{second}", "%Y-%m-%d %H:%M:%S"
+            )
+        except ValueError:
+            return None, None
+        compact_date = date.replace("-", "")
+        duplicate_suffix = f"_{duplicate}" if duplicate else ""
+        return dt, f"{compact_date}_{hour_int:02d}{minute}{second}{duplicate_suffix}"
+
+    return None, None
+
+
+def _is_image_path(path: str) -> bool:
+    return os.path.splitext(path)[1].lower() in IMAGE_EXTENSIONS
+
+
+def _clean_component(value: str, *, is_image_description: bool = False) -> str:
+    cleaned = sanitize_filename(normalize_unicode(value or "")).strip()
+    if not is_valid_filename(cleaned):
+        return ""
+    lowered = cleaned.casefold()
+    if lowered in WEAK_COMPONENTS:
+        return ""
+    if is_image_description and lowered in WEAK_IMAGE_DESCRIPTIONS:
+        return ""
+    return cleaned
+
+
 def _rename_with_retry(src: str, dst: str, retries: int = 3, delay: float = 1.0) -> None:
     """Rename with retry on PermissionError. Raises on final failure."""
     for attempt in range(retries):
@@ -91,35 +179,64 @@ def rename_invoice(
     Returns the new path on success, None on skip/error.
     """
     date_format = config.get("output", {}).get("date_format", "%Y%m%d")
+    output_config = config.get("output", {})
+    use_source_timestamp_fallback = output_config.get("use_source_timestamp_fallback", True)
+    preserve_source_timestamp_for_images = output_config.get("preserve_source_timestamp_for_images", True)
+    omit_unknown_components = output_config.get("omit_unknown_components", True)
+    skip_when_no_substantial_description = output_config.get(
+        "skip_when_no_substantial_description", True
+    )
     pdf_path = normalize_unicode(pdf_path)
-    company_name = sanitize_filename(normalize_unicode(company_name))
-    document_type = sanitize_filename(normalize_unicode(document_type))
+    extension = os.path.splitext(pdf_path)[1] or ".pdf"
+    is_image = _is_image_path(pdf_path)
+    source_dt, source_token = extract_source_timestamp(pdf_path)
 
-    # Validate components (fall back to Unknown if sanitization left nothing usable)
-    if not is_valid_filename(company_name):
+    company_name = _clean_component(company_name) if omit_unknown_components else sanitize_filename(normalize_unicode(company_name))
+    document_type = _clean_component(
+        document_type,
+        is_image_description=is_image,
+    ) if omit_unknown_components else sanitize_filename(normalize_unicode(document_type))
+
+    # Preserve legacy fallback behavior when omission is disabled.
+    if not omit_unknown_components and not is_valid_filename(company_name):
         company_name = UNKNOWN_VALUE
-    if not is_valid_filename(document_type):
+    if not omit_unknown_components and not is_valid_filename(document_type):
         document_type = UNKNOWN_VALUE
 
-    if document_date:
-        base_name = f'{document_date.strftime(date_format)} {company_name} {document_type}'
+    if is_image and preserve_source_timestamp_for_images and source_token:
+        date_part = source_token
+    elif document_date:
+        date_part = document_date.strftime(date_format)
+    elif source_dt and use_source_timestamp_fallback:
+        date_part = source_dt.strftime(date_format)
     else:
-        base_name = f'{DEFAULT_DATE} {company_name} {document_type}'
+        date_part = DEFAULT_DATE
 
-    # Guard against combined filename exceeding filesystem limits
-    # 255 max - 4 (.pdf) - 6 (_(999)) - 1 = 244 chars for base_name
-    max_base = 244
+    name_parts = [date_part]
+    if company_name:
+        name_parts.append(company_name)
+    if document_type:
+        name_parts.append(document_type)
+
+    if (
+        is_image
+        and source_token
+        and skip_when_no_substantial_description
+        and not company_name
+        and not document_type
+    ):
+        logging.info(f'File "{os.path.basename(pdf_path)}" has no substantial rename metadata.')
+        return None
+
+    base_name = " ".join(name_parts).strip()
+
+    # Guard against combined filename exceeding filesystem limits.
+    # Reserve room for the original extension and duplicate suffixes.
+    max_base = 255 - len(extension) - 6 - 1
     if len(base_name) > max_base:
-        excess = len(base_name) - max_base
-        truncated = company_name[:len(company_name) - excess].rstrip()
-        if not truncated.strip():
-            truncated = UNKNOWN_VALUE
-        if document_date:
-            base_name = f'{document_date.strftime(date_format)} {truncated} {document_type}'
-        else:
-            base_name = f'{DEFAULT_DATE} {truncated} {document_type}'
+        base_name = base_name[:max_base].rstrip()
 
-    new_name = normalize_unicode(f"{base_name}.pdf")
+    new_name = normalize_unicode(f"{base_name}{extension}")
     new_path = os.path.join(os.path.dirname(pdf_path), new_name)
 
     if pdf_path == new_path:
@@ -130,7 +247,7 @@ def rename_invoice(
     counter = 0
     while os.path.exists(new_path):
         counter += 1
-        new_name = f'{base_name}_({counter}).pdf'
+        new_name = f'{base_name}_({counter}){extension}'
         new_path = os.path.join(os.path.dirname(pdf_path), new_name)
 
     if dry_run:

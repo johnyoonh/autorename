@@ -32,6 +32,7 @@ _handle_rename = _mod._handle_rename
 _handle_undo = _mod._handle_undo
 _main = _mod.main
 get_base_directory = _mod.get_base_directory
+collect_pdf_files = _mod.collect_pdf_files
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from conftest import assert_batch_result_schema, assert_error_result_schema, assert_undo_result_schema, assert_batch_list_schema
@@ -57,6 +58,13 @@ class TestBuildParser:
         assert args.subcommand == "rename"
         assert args.paths == ["a.pdf", "b.pdf"]
 
+    def test_rename_image_path(self):
+        parser = build_parser()
+        args = parser.parse_args(["rename", "receipt.png", "--dry-run"])
+        assert args.subcommand == "rename"
+        assert args.paths == ["receipt.png"]
+        assert args.dry_run is True
+
     def test_rename_recursive(self):
         parser = build_parser()
         args = parser.parse_args(["rename", "folder", "-r"])
@@ -70,14 +78,15 @@ class TestBuildParser:
 
     def test_organize_defaults_to_preview(self):
         parser = build_parser()
-        args = parser.parse_args(["organize"])
+        args = parser.parse_args(["organize", "run"])
         assert args.subcommand == "organize"
+        assert args.organize_action == "run"
         assert args.older_than == 30
         assert args.apply is False
 
     def test_organize_apply_and_destination(self):
         parser = build_parser()
-        args = parser.parse_args(["organize", "/tmp/inbox", "--destination", "/tmp/archive", "--apply"])
+        args = parser.parse_args(["organize", "run", "/tmp/inbox", "--destination", "/tmp/archive", "--apply"])
         assert args.source == "/tmp/inbox"
         assert args.destination == "/tmp/archive"
         assert args.apply is True
@@ -161,6 +170,28 @@ class TestBuildParser:
 # 2. argv preprocessing
 # ---------------------------------------------------------------------------
 
+
+class TestCollectFiles:
+    def test_collects_pdf_and_image_files(self, tmp_path):
+        pdf = tmp_path / "invoice.pdf"
+        png = tmp_path / "receipt.png"
+        txt = tmp_path / "notes.txt"
+        pdf.write_text("pdf")
+        png.write_bytes(b"image")
+        txt.write_text("notes")
+
+        result = sorted(os.path.basename(p) for p in collect_pdf_files([str(tmp_path)]))
+        assert result == ["invoice.pdf", "receipt.png"]
+
+    def test_collects_images_recursively(self, tmp_path):
+        nested = tmp_path / "nested"
+        nested.mkdir()
+        jpg = nested / "receipt.jpg"
+        jpg.write_bytes(b"image")
+
+        result = collect_pdf_files([str(tmp_path)], recursive=True)
+        assert result == [str(jpg)]
+
 class TestPreprocessArgv:
     """Test _preprocess_argv injects 'rename' subcommand when needed."""
 
@@ -190,7 +221,18 @@ class TestPreprocessArgv:
         assert result == ["undo"]
 
     def test_organize_subcommand_unchanged(self):
-        assert _preprocess_argv(["organize", "/tmp/inbox"]) == ["organize", "/tmp/inbox"]
+        assert _preprocess_argv(["organize", "/tmp/inbox"]) == ["organize", "run", "/tmp/inbox"]
+
+    def test_organize_action_is_unchanged(self):
+        assert _preprocess_argv(["organize", "index"]) == ["organize", "index"]
+
+    def test_organize_intake_is_unchanged(self):
+        assert _preprocess_argv(["organize", "intake", "/tmp/inbox"]) == [
+            "organize", "intake", "/tmp/inbox"
+        ]
+
+    def test_organize_help_shows_action_parser(self):
+        assert _preprocess_argv(["organize", "--help"]) == ["organize", "--help"]
 
     def test_empty_argv(self):
         result = _preprocess_argv([])
@@ -927,6 +969,30 @@ class TestHandleRename:
         assert config_used["pdf"]["vision"] is True
         assert config_used["pdf"]["ocr"] is True
 
+    @patch("autorename_pdf.process_pdf")
+    @patch("autorename_pdf.collect_pdf_files", return_value=["/tmp/test.png"])
+    @patch("autorename_pdf.load_yaml_config")
+    @patch("autorename_pdf.get_base_directory", return_value="/fake")
+    def test_text_only_leaves_image_llm_vision_config_unchanged(self, mock_bd, mock_load, mock_collect, mock_proc, capsys, sample_config):
+        sample_config.setdefault("image", {})["llm_vision"] = True
+        mock_load.return_value = sample_config
+        mock_proc.return_value = FileResult(
+            file="/tmp/test.png", status="skipped",
+            provider="openai", model="gpt-5.4-mini",
+        )
+
+        args = argparse.Namespace(
+            config_path=None, paths=["/tmp/test.png"], dry_run=True,
+            recursive=False, quiet=False, output="json",
+            provider=None, model=None, vision=False, text_only=True, ocr=False,
+        )
+        with pytest.raises(SystemExit):
+            _handle_rename(args, "json")
+
+        config_used = mock_proc.call_args[0][1]
+        assert config_used["pdf"]["vision"] is False
+        assert config_used["image"]["llm_vision"] is True
+
 
 class TestHandleUndo:
     """Test _handle_undo JSON output contract and exit codes."""
@@ -1088,3 +1154,93 @@ class TestGetBaseDirectory:
             with patch.object(sys, "executable", "/path/to/autorename-pdf.exe"):
                 result = get_base_directory(None)
         assert result == "/path/to"
+
+
+@pytest.mark.parametrize('status', [401, 403])
+def test_auth_failure_stops_batch_and_preserves_json_contract(sample_config, capsys, status):
+    import httpx
+    from openai import OpenAI
+    from _pdf_utils import ExtractionResult
+    from _ai_processing import DocumentMetadata
+
+    requests = []
+    def handle(request):
+        requests.append(request)
+        return httpx.Response(status, json={'error': {'message': 'synthetic-secret-key must never reach logs', 'type': 'invalid_request_error', 'code': 'missing_scope'}})
+    def client_factory(**kwargs):
+        return OpenAI(api_key='synthetic', http_client=httpx.Client(transport=httpx.MockTransport(handle)), max_retries=2)
+    args = argparse.Namespace(config_path=None, paths=['/tmp/a.pdf', '/tmp/b.pdf'], dry_run=True,
+                              recursive=False, quiet=True, provider=None, model=None,
+                              vision=False, text_only=False, ocr=False, output='json')
+    with patch('autorename_pdf.load_yaml_config', return_value=sample_config), \
+         patch('autorename_pdf.get_base_directory', return_value='/fake'), \
+         patch('autorename_pdf.collect_pdf_files', return_value=args.paths), \
+         patch('autorename_pdf.extract_content', return_value=ExtractionResult(text='Synthetic invoice', images=[], sources=['text'])), \
+         patch('_ai_processing.OpenAI', side_effect=client_factory), \
+         patch('autorename_pdf.rename_invoice') as rename, \
+         pytest.raises(SystemExit) as exc:
+        _handle_rename(args, 'json')
+    assert exc.value.code == ExitCode.AUTH_ERROR
+    assert len(requests) == 1
+    rename.assert_not_called()
+    captured = capsys.readouterr()
+    assert 'synthetic-secret-key' not in captured.out + captured.err
+    data = json.loads(captured.out)
+    assert_batch_result_schema(data)
+    assert data['failed'] == data['total'] == 2
+    assert data['files'][0]['error_type'] == 'auth_error'
+    assert data['files'][1]['error_type'] == 'not_attempted'
+
+
+def test_cli_provider_override_precedes_env_and_explicit_model_is_last(tmp_path, monkeypatch, capsys):
+    path = tmp_path / 'config.yaml'
+    path.write_text('config_version: 2\nai:\n  provider: anthropic\n  api_key: configured-key\n  model: configured-model\n')
+    monkeypatch.setenv('OPENAI_API_KEY', 'openai-env-key')
+    monkeypatch.setenv('OPENAI_EVERDAY_MODEL', 'openai-env-model')
+    args = argparse.Namespace(config_path=str(path), paths=['/tmp/a.pdf'], dry_run=True,
+                              recursive=False, quiet=True, provider='openai', model='explicit-model',
+                              vision=False, text_only=False, ocr=False, output='json')
+    def process(path, config, *unused, **kwargs):
+        assert config['ai']['provider'] == 'openai'
+        assert config['ai']['api_key'] == 'openai-env-key'
+        assert config['ai']['model'] == 'explicit-model'
+        return FileResult(file=path, status='skipped')
+    with patch('autorename_pdf.collect_pdf_files', return_value=args.paths), patch('autorename_pdf.process_pdf', side_effect=process), pytest.raises(SystemExit) as exc:
+        _handle_rename(args, 'json')
+    assert exc.value.code == 0
+
+
+def test_auth_failure_after_success_preserves_undo(tmp_path, sample_config, capsys):
+    import httpx
+    from openai import OpenAI
+    from _pdf_utils import ExtractionResult
+    from tests.test_openai_responses import _response
+    requests = []
+    files = [tmp_path / name for name in ('a.pdf', 'b.pdf', 'c.pdf')]
+    for path in files:
+        path.write_bytes(b'synthetic document')
+    def handle(request):
+        requests.append(request)
+        if len(requests) == 1:
+            return httpx.Response(200, json=_response())
+        return httpx.Response(401, json={'error': {'message': 'Missing model.request', 'type': 'invalid_request_error', 'code': 'missing_scope'}})
+    def client_factory(**kwargs):
+        return OpenAI(api_key='synthetic', http_client=httpx.Client(transport=httpx.MockTransport(handle)))
+    args = argparse.Namespace(config_path=None, paths=[str(p) for p in files], dry_run=False,
+                              recursive=False, quiet=True, provider=None, model=None,
+                              vision=False, text_only=False, ocr=False, output='json')
+    with patch('autorename_pdf.load_yaml_config', return_value=sample_config), \
+         patch('autorename_pdf.get_base_directory', return_value=str(tmp_path)), \
+         patch('autorename_pdf.collect_pdf_files', return_value=args.paths), \
+         patch('autorename_pdf.extract_content', return_value=ExtractionResult(text='Synthetic invoice', images=[], sources=['text'])), \
+         patch('_ai_processing.OpenAI', side_effect=client_factory), pytest.raises(SystemExit) as exc:
+        _handle_rename(args, 'json')
+    assert exc.value.code == ExitCode.AUTH_ERROR
+    data = json.loads(capsys.readouterr().out)
+    assert data['renamed'] == 1 and data['failed'] == 2
+    assert len(requests) == 2
+    assert not files[0].exists()
+    assert files[1].exists() and files[2].exists()
+    restored, failed, _ = _mod.undo_renames(str(tmp_path / '.autorename-log.json'))
+    assert (restored, failed) == (1, 0)
+    assert all(path.read_bytes() == b'synthetic document' for path in files)

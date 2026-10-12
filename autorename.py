@@ -69,7 +69,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _config(args: argparse.Namespace) -> tuple[dict, str]:
     configured = args.app_config_path or os.environ.get("AUTORENAME_APP_CONFIG")
     config_path = os.path.abspath(os.path.expanduser(configured)) if configured else os.path.join(BASE_DIR, "config.yaml")
-    config = load_yaml_config(config_path)
+    config = load_yaml_config(config_path, provider=args.provider)
     if not config:
         raise RuntimeError(f"Could not load application config: {config_path}")
 

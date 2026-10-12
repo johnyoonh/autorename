@@ -114,6 +114,7 @@ class TestLoadYamlConfig:
         assert result is None
 
     def test_paddleocr_path_autodetect(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "win32")
         monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
         config = {"config_version": 2, "ai": {"provider": "openai", "api_key": "test"}}
         path = str(tmp_path / "config.yaml")
@@ -352,3 +353,74 @@ company:
         config = load_yaml_config(str(config_file))
         assert config is not None
         assert config["ai"]["api_key"] == "sk-from-env-var"
+
+
+@pytest.mark.parametrize('model_var', ['OPENAI_EVERDAY_MODEL', 'OPENAI_EVERYDAY_MODEL'])
+def test_openai_prefers_environment_over_legacy_literals(tmp_path, monkeypatch, model_var):
+    monkeypatch.setenv('OPENAI_API_KEY', 'synthetic-env-key')
+    monkeypatch.delenv('OPENAI_EVERDAY_MODEL', raising=False)
+    monkeypatch.delenv('OPENAI_EVERYDAY_MODEL', raising=False)
+    monkeypatch.setenv(model_var, 'synthetic-env-model')
+    path = tmp_path / 'config.yaml'
+    path.write_text('config_version: 2\nai:\n  provider: openai\n  api_key: stale-literal\n  model: stale-model\n')
+    result = load_yaml_config(str(path))
+    assert result['ai']['api_key'] == 'synthetic-env-key'
+    assert result['ai']['model'] == 'synthetic-env-model'
+
+
+def test_openai_model_spelling_precedence(tmp_path, monkeypatch):
+    monkeypatch.setenv('OPENAI_EVERDAY_MODEL', 'requested-spelling')
+    monkeypatch.setenv('OPENAI_EVERYDAY_MODEL', 'fallback-spelling')
+    path = tmp_path / 'config.yaml'
+    path.write_text('config_version: 2\nai:\n  provider: openai\n')
+    assert load_yaml_config(str(path))['ai']['model'] == 'requested-spelling'
+
+
+def test_openai_environment_does_not_override_other_providers(tmp_path, monkeypatch):
+    monkeypatch.setenv('OPENAI_API_KEY', 'synthetic-env-key')
+    monkeypatch.setenv('OPENAI_EVERDAY_MODEL', 'synthetic-env-model')
+    path = tmp_path / 'config.yaml'
+    path.write_text('config_version: 2\nai:\n  provider: anthropic\n  api_key: anthropic-key\n  model: anthropic-model\n')
+    result = load_yaml_config(str(path))
+    assert result['ai']['api_key'] == 'anthropic-key'
+    assert result['ai']['model'] == 'anthropic-model'
+
+
+@pytest.mark.parametrize('original,effective,expected_key,expected_model', [
+    ('openai', 'anthropic', 'configured-key', 'configured-model'),
+    ('anthropic', 'openai', 'openai-env-key', 'openai-env-model'),
+])
+def test_provider_override_precedes_openai_overlay(tmp_path, monkeypatch, original, effective, expected_key, expected_model):
+    monkeypatch.setenv('OPENAI_API_KEY', 'openai-env-key')
+    monkeypatch.setenv('OPENAI_EVERDAY_MODEL', 'openai-env-model')
+    path = tmp_path / 'config.yaml'
+    path.write_text(f'config_version: 2\nai:\n  provider: {original}\n  api_key: configured-key\n  model: configured-model\n')
+    result = load_yaml_config(str(path), provider=effective)
+    assert result['ai']['provider'] == effective
+    assert result['ai']['api_key'] == expected_key
+    assert result['ai']['model'] == expected_model
+
+
+def test_interpolated_provider_gets_openai_environment(tmp_path, monkeypatch):
+    monkeypatch.setenv('AI_PROVIDER', 'openai')
+    monkeypatch.setenv('OPENAI_API_KEY', 'openai-env-key')
+    monkeypatch.setenv('OPENAI_EVERDAY_MODEL', 'openai-env-model')
+    path = tmp_path / 'config.yaml'
+    path.write_text('config_version: 2\nai:\n  provider: "${AI_PROVIDER}"\n  api_key: configured-key\n  model: configured-model\n')
+    result = load_yaml_config(str(path))
+    assert result['ai']['api_key'] == 'openai-env-key'
+    assert result['ai']['model'] == 'openai-env-model'
+
+
+def test_openai_dotenv_overlay_and_exported_environment_precedence(tmp_path, monkeypatch):
+    path = tmp_path / 'config.yaml'
+    path.write_text('config_version: 2\nai:\n  provider: openai\n  api_key: stale-key\n  model: stale-model\n')
+    (tmp_path / '.env').write_text('OPENAI_API_KEY=dotenv-key\nOPENAI_EVERDAY_MODEL=dotenv-model\n')
+    result = load_yaml_config(str(path))
+    assert result['ai']['api_key'] == 'dotenv-key'
+    assert result['ai']['model'] == 'dotenv-model'
+    monkeypatch.setenv('OPENAI_API_KEY', 'exported-key')
+    monkeypatch.setenv('OPENAI_EVERDAY_MODEL', 'exported-model')
+    result = load_yaml_config(str(path))
+    assert result['ai']['api_key'] == 'exported-key'
+    assert result['ai']['model'] == 'exported-model'

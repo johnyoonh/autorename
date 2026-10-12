@@ -12,11 +12,17 @@
 
 ![AutoRename-PDF desktop GUI showing drag-and-drop PDF renaming with AI-extracted metadata](screenshot/autorename-pdf-gui.png)
 
+AutoRename is for people who want a local document-renaming and Downloads-filing
+workflow. It owns extraction, naming, grouping, deduplication, and placement in
+explicitly allowlisted filesystem roots; it does not manage cloud accounts or
+scan remote services through provider APIs.
+
 - **Desktop GUI** — Drag-and-drop files, preview renames before applying, undo if needed
 - **5 AI Providers** — OpenAI, Anthropic (Claude), Google Gemini, xAI (Grok), and Ollama for free offline use
 - **3-Tier Extraction** — Text extraction (free, instant) + OCR for scanned PDFs + vision for image-only PDFs
 - **Windows Integration** — Right-click context menu in Windows Explorer for instant renaming
 - **Batch Processing** — Rename hundreds of PDFs at once with automatic company name harmonization
+- **Downloads Organizer** — Deduplicate, flatten, group, and file aging downloads into indexed cloud folders
 - **Privacy Option** — Run fully offline with Ollama + PaddleOCR — no data leaves your machine
 
 ## Quick Start
@@ -84,19 +90,22 @@ ai:
 
 ```yaml
 ai:
+  provider: "openai"
   api_key: "${OPENAI_API_KEY}"
+  model: "${OPENAI_EVERDAY_MODEL}"
 ```
 
 Then create a `.env` file next to your `config.yaml`:
 
 ```
 OPENAI_API_KEY=sk-your-actual-key-here
+OPENAI_EVERDAY_MODEL=gpt-5.4-mini
 ANTHROPIC_API_KEY=sk-ant-your-key-here
 ```
 
-The `${VAR_NAME}` syntax works in any string value in `config.yaml`. A `.env` file placed next to `config.yaml` is loaded automatically.
+The `${VAR_NAME}` syntax works in any string value in `config.yaml`. A `.env` file placed next to `config.yaml` is loaded automatically without replacing values already exported by your shell. For OpenAI, `OPENAI_API_KEY` and `OPENAI_EVERDAY_MODEL` override legacy YAML values when set; `OPENAI_EVERYDAY_MODEL` is a fallback spelling for the model. Explicit `--model` still takes precedence. Other providers retain their configured values.
 
-> **Tip:** Method 2 lets you store all your API keys in `.env` and switch providers in `config.yaml` by just changing the `${VAR_NAME}` reference. See `.env.example` for a template.
+> **Tip:** Method 2 lets you store all your API keys in `.env` and switch providers in `config.yaml` by just changing the `${VAR_NAME}` reference. See [OpenAI environment example](docs/openai-environment.example) for a template.
 
 ### Recommended Setups
 
@@ -170,6 +179,15 @@ See `config.yaml.example` for full documentation of all settings.
 | `pdf.vision` | `false` / `true` / `"auto"` | Send page images to LLM |
 | `pdf.text_quality_threshold` | `0.0` – `1.0` | Triggers OCR/vision in `"auto"` mode (default: `0.3`) |
 | `pdf.max_pages` | integer | Max pages to process per PDF (default: `3`) |
+| `image.apple_vision` | `false` / `true` | OCR standalone image files locally with Apple Vision on macOS |
+| `image.apple_vision_classify` | `false` / `true` | Add built-in Vision image classification labels as metadata hints |
+| `image.coreml_model_path` | path | Optional `.mlmodelc` model used through `VNCoreMLRequest` |
+| `image.llm_vision` | `false` / `true` / `"auto"` | Also send standalone image pixels to the configured LLM |
+| `image.screenshot_mode` | `false` / `true` / `"auto"` | Add screenshot-specific context for UI screenshots so visible text, tabs, URLs, and headings are prioritized |
+| `output.use_source_timestamp_fallback` | `false` / `true` | Use a timestamp already present in the source filename when AI finds no document date |
+| `output.preserve_source_timestamp_for_images` | `false` / `true` | Convert screenshot-style timestamps to compact prefixes such as `20240102_142144` for image filenames |
+| `output.omit_unknown_components` | `false` / `true` | Omit weak values like `Unknown` instead of writing them into filenames |
+| `output.skip_when_no_substantial_description` | `false` / `true` | Leave timestamp-only screenshots unchanged when AI only returns a generic screenshot label |
 
 - **`false`** = disabled (default for both)
 - **`true`** = always run alongside text extraction
@@ -177,7 +195,28 @@ See `config.yaml.example` for full documentation of all settings.
 
 All enabled sources are combined before sending to the AI — maximizing extraction accuracy.
 
+Standalone image files (`.png`, `.jpg`, `.jpeg`, `.tif`, `.tiff`, `.bmp`, `.gif`, `.webp`, `.heic`, `.heif`) are supported by the CLI. On macOS, Apple Vision OCR and classification run locally when `image.apple_vision` is enabled. If `image.coreml_model_path` points to a compiled Core ML model, its `VNCoreMLRequest` observations are added as extra hints for the metadata extraction prompt.
+
 ## Usage
+
+### macOS Finder
+
+Install two Finder Quick Actions from a stable checkout after running `setup.sh` and configuring `config.yaml`:
+
+```bash
+python3 install-finder-actions.py                 # preview installation
+python3 install-finder-actions.py --apply         # install
+python3 install-finder-actions.py --apply --replace  # back up and replace old actions
+```
+
+Select PDFs or supported images in Finder, then choose **Quick Actions** (or **Services**):
+
+- **Preview AutoRename** proposes names without renaming files.
+- **Rename with AutoRename** explicitly applies renames in place.
+
+The installer records the checkout path locally and selects its `.venv` or `venv` Python. Use `--repo /path/to/stable/checkout` when running the installer from a temporary development worktree. Reinstall if you move the checkout. Existing actions are preserved unless `--replace` is supplied; replacements keep uniquely named backups in the Services folder.
+
+Both actions use `quickaction-helper.sh`, preserve file extensions, report batch results through macOS notifications, and log diagnostics to `$HOME/Library/Logs/AutoRename-Finder.log`. Preview details appear in that log. Unsupported files are skipped. Provider settings come from the existing local configuration; no routing or inbox action is installed.
 
 ### GUI
 
@@ -204,50 +243,66 @@ After running `setup.ps1`, right-click in Windows Explorer:
 
 ```bash
 # Rename a single PDF
-autorename-pdf-cli.exe "C:\path\to\file.pdf"
+autorename.exe "C:\path\to\file.pdf"
+
+# Rename a standalone image file
+autorename.exe "C:\path\to\receipt.png"
 
 # Preview what would be renamed (no changes made)
-autorename-pdf-cli.exe --dry-run "C:\path\to\folder"
+autorename.exe --dry-run "C:\path\to\folder"
 
 # Process folders recursively
-autorename-pdf-cli.exe --recursive "C:\path\to\folder"
+autorename.exe --recursive "C:\path\to\folder"
 
 # Undo the last rename operation
-autorename-pdf-cli.exe undo
+autorename.exe undo
 
 # Override AI provider/model for one run
-autorename-pdf-cli.exe --provider anthropic --model claude-sonnet-4-6 "file.pdf"
+autorename.exe --provider anthropic --model claude-sonnet-4-6 "file.pdf"
 
 # Enable vision and/or OCR
-autorename-pdf-cli.exe --vision --ocr "scanned_document.pdf"
+autorename.exe --vision --ocr "scanned_document.pdf"
 
 # JSON output (for scripting / GUI integration)
-autorename-pdf-cli.exe rename --output json "C:\path\to\folder"
+autorename.exe rename --output json "C:\path\to\folder"
 ```
 
-### Downloads aging workflow
+### Indexed Downloads workflow
 
-On macOS or Linux, preview top-level files that have remained in Downloads for
-more than 30 days:
+Copy `root-structure.yaml.example` to the private `root-structure.yaml`, then
+replace the placeholder cloud root and destinations with locally synced paths.
+Build the metadata catalog without hashing every file:
 
 ```bash
-python autorename-pdf.py organize ~/Downloads
+autorename organize index
 ```
 
-PDFs are renamed with the normal AI pipeline before classification. Other files
-use deterministic extension rules. The default destination is
-`~/Archives/Downloads`, organized by category and year. Unknown formats, failed
-PDF analysis, and destination collisions are routed to `Review`; hidden files,
-partial downloads, folders, and symlinks are ignored.
+Run `autorename organize intake "$HOME/Downloads" --apply` every five minutes.
+The first scan records file size and modification time; a later unchanged scan
+performs lazy exact-hash matching, removes the incoming duplicate, and surfaces
+the indexed canonical file.
 
-Preview is the default. Apply a reviewed batch explicitly:
+Preview files older than 30 days. Nested ordinary folders are flattened, related
+files are grouped, and indexed tags, aliases, and existing filenames determine
+the destination. If no destination reaches the confidence threshold, a new
+group is created below the configured managed inbox.
 
 ```bash
-python autorename-pdf.py organize ~/Downloads --apply
+autorename organize run "$HOME/Downloads"
 ```
 
-Use `--skip-pdf-renaming` for an offline, extension-only run. Every preview and
-applied run appends JSON Lines records to `.organize-log.jsonl` in the archive.
+Apply a reviewed batch explicitly, or use this form from a scheduler:
+
+```bash
+autorename organize run "$HOME/Downloads" --apply
+```
+
+Exact duplicate content is removed only after the indexed canonical file is
+re-hashed. Its modification time is updated so it appears among recent files.
+Every action is journaled and can be reversed with
+`autorename organize undo <run-id>`. Agy and sandboxed Codex Luna are optional
+tie-breakers for ambiguous destinations; edit `organize.recognition_backends`
+to disable either backend.
 
 <details>
 <summary><strong>Full CLI Reference</strong></summary>
@@ -256,7 +311,12 @@ applied run appends JSON Lines records to `.organize-log.jsonl` in the archive.
 
 | Subcommand | Description |
 |------------|-------------|
-| `rename` | Rename PDF files (default if omitted) |
+| `rename` | Rename PDF/image files (default if omitted) |
+| `organize run` | Preview or apply Downloads organization |
+| `organize intake` | Detect settled exact duplicates |
+| `organize index` | Refresh configured cloud-root metadata |
+| `organize status` | Display index freshness and counts |
+| `organize undo` | Reverse one organization run |
 | `undo` | Reverse file renames using the undo log |
 | `config show` | Display current configuration (API keys redacted) |
 | `config validate` | Validate configuration and report issues |
@@ -387,8 +447,8 @@ After setup, edit `config.yaml` with your AI provider API key and run:
 
 ```bash
 source venv/bin/activate
-python autorename-pdf.py --dry-run invoice.pdf
-python autorename-pdf.py invoice.pdf
+autorename --dry-run invoice.pdf
+autorename invoice.pdf
 ```
 
 ### Manual Setup
@@ -408,8 +468,8 @@ cp config.yaml.example config.yaml
 # Edit config.yaml with your AI key and provider
 
 # Run
-python autorename-pdf.py --dry-run invoice.pdf
-python autorename-pdf.py invoice.pdf
+./autorename --dry-run invoice.pdf
+./autorename invoice.pdf
 ```
 
 **Platform notes:**
@@ -461,7 +521,7 @@ Functional Python (no classes). Modules prefixed with `_` are internal:
 | Module | Purpose |
 |--------|---------|
 | `autorename-pdf.py` | Entry point, CLI (argparse), orchestration |
-| `_ai_processing.py` | Multi-provider AI via instructor, structured output (Pydantic) |
+| `_ai_processing.py` | OpenAI Responses and compatible providers, structured output (Pydantic) |
 | `_pdf_utils.py` | Text extraction (pdfplumber), image rendering (pypdfium2), PaddleOCR bridge |
 | `_paddleocr_bridge.py` | Subprocess bridge script for PaddleOCR venv |
 | `_document_processing.py` | Company harmonization (rapidfuzz), renaming, undo log |
@@ -470,11 +530,13 @@ Functional Python (no classes). Modules prefixed with `_` are internal:
 
 ## AI Providers (Technical)
 
-All providers use [instructor](https://github.com/jxnl/instructor) for structured Pydantic output.
+OpenAI uses native [Responses structured output](https://developers.openai.com/api/docs/guides/structured-outputs) through `responses.parse(text_format=DocumentMetadata)` for text, images, and mixed inputs. Response storage is disabled (`store=False`), and OpenAI sampling parameters use the selected model’s defaults. Other providers retain [instructor](https://github.com/jxnl/instructor) for structured Pydantic output.
+
+OpenAI HTTP 401/403 stops the rename batch and returns exit code 11. JSON marks the rejected file as `auth_error` and remaining files as `not_attempted`; earlier successful renames and undo records are preserved. Fix `OPENAI_API_KEY` and the project/key model-request permissions before retrying. A dry run still calls the provider, but does not rename files.
 
 | Provider | SDK | Notes |
 |----------|-----|-------|
-| `openai` | openai (native) | Default |
+| `openai` | openai (native) | Responses API, strict schema parsing |
 | `anthropic` | anthropic (native) | Uses `instructor.from_anthropic()` — Anthropic's OpenAI compat layer ignores structured output |
 | `gemini` | openai (base_url) | Google's OpenAI-compatible endpoint |
 | `xai` | openai (base_url) | Grok models |
@@ -483,6 +545,7 @@ All providers use [instructor](https://github.com/jxnl/instructor) for structure
 ## Testing
 
 ```bash
+python tests/generate_test_pdfs.py  # synthetic fixtures, ignored by Git
 pytest tests/ -v --cov
 ```
 

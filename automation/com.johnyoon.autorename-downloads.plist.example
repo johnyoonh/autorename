@@ -9,11 +9,13 @@
     <string>REPO/.venv/bin/python</string>
     <string>REPO/autorename-pdf.py</string>
     <string>organize</string>
+    <string>run</string>
     <string>HOME/Downloads</string>
     <string>--destination</string>
     <string>HOME/Archives/Downloads</string>
     <string>--older-than</string>
     <string>30</string>
+    <string>--apply</string>
     <string>--skip-pdf-renaming</string>
     <string>--output</string>
     <string>json</string>
@@ -21,7 +23,7 @@
   <key>StartCalendarInterval</key>
   <dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict>
   <key>StandardOutPath</key>
-  <string>HOME/Library/Logs/autorename-downloads-preview.json</string>
+  <string>HOME/Library/Logs/autorename-downloads.json</string>
   <key>StandardErrorPath</key>
   <string>HOME/Library/Logs/autorename-downloads-error.log</string>
 </dict>

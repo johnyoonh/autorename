@@ -1,0 +1,5 @@
+# Copy these settings to .env next to config.yaml, or export them in your shell.
+# Replace the placeholder with your own credential; never commit .env.
+OPENAI_API_KEY=sk-your-openai-key
+OPENAI_EVERDAY_MODEL=gpt-5.4-mini
+# OPENAI_EVERYDAY_MODEL is accepted as a fallback spelling.

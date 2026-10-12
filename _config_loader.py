@@ -47,6 +47,19 @@ DEFAULTS = {
         "outgoing_invoice": "AR",
         "incoming_invoice": "ER",
     },
+    "image": {
+        "apple_vision": True,
+        "apple_vision_recognition_level": "accurate",
+        "apple_vision_language_correction": True,
+        "apple_vision_languages": ["en-US"],
+        "apple_vision_classify": True,
+        "apple_vision_max_classifications": 8,
+        "apple_vision_min_confidence": 0.15,
+        "llm_vision": False,
+        "screenshot_mode": "auto",
+        "coreml_model_path": "",
+        "coreml_max_observations": 10,
+    },
     "paddleocr": {
         "venv_path": "",
         "language": "en",
@@ -61,6 +74,15 @@ DEFAULTS = {
     "output": {
         "language": "English",
         "date_format": "%Y%m%d",
+        "use_source_timestamp_fallback": True,
+        "preserve_source_timestamp_for_images": True,
+        "omit_unknown_components": True,
+        "skip_when_no_substantial_description": True,
+    },
+    "organize": {
+        "recognition_backends": ["agy", "codex"],
+        "recognition_timeout": 60,
+        "maximum_files": 100,
     },
     "prompt_extension": "",
 }
@@ -217,7 +239,7 @@ def _migrate_paddleocr_languages(config: dict) -> dict:
     return config
 
 
-def load_yaml_config(config_path: str) -> dict[str, Any] | None:
+def load_yaml_config(config_path: str, *, provider: str | None = None) -> dict[str, Any] | None:
     """Load and validate configuration from a YAML file.
 
     Returns a fully-merged config dict with defaults applied,
@@ -250,6 +272,19 @@ def load_yaml_config(config_path: str) -> dict[str, Any] | None:
 
             # Merge with defaults
             config = _deep_merge(DEFAULTS, raw_config)
+
+            # Resolve the effective provider before any credential overlay.
+            config["ai"]["provider"] = provider or _resolve_env_vars(config["ai"]["provider"])
+
+            # OpenAI environment values supersede legacy YAML literals. CLI
+            # overrides are applied by the command handlers after this load.
+            if config["ai"]["provider"] == "openai":
+                env_key = os.environ.get("OPENAI_API_KEY")
+                env_model = os.environ.get("OPENAI_EVERDAY_MODEL") or os.environ.get("OPENAI_EVERYDAY_MODEL")
+                if env_key:
+                    config["ai"]["api_key"] = env_key
+                if env_model:
+                    config["ai"]["model"] = env_model
 
             # Resolve ${VAR} environment variable references
             config = _interpolate_env_vars(config)

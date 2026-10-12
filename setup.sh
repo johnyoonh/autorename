@@ -164,11 +164,11 @@ fi
 
 # Step 8: Create shell alias (optional)
 echo ""
-read -p "$(echo -e "${YELLOW}Create shell alias 'autorename-pdf' for easy access? (y/N):${NC} ")" -n 1 -r
+read -p "$(echo -e "${YELLOW}Create shell alias 'autorename' for easy access? (y/N):${NC} ")" -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    ALIAS_CMD="alias autorename-pdf='source \"$SCRIPT_DIR/venv/bin/activate\" && python \"$SCRIPT_DIR/autorename-pdf.py\"'"
+    ALIAS_CMD="alias autorename='source \"$SCRIPT_DIR/venv/bin/activate\" && python \"$SCRIPT_DIR/autorename-pdf.py\"'"
 
     # Detect shell config file
     if [ -n "$ZSH_VERSION" ]; then
@@ -179,7 +179,7 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
         SHELL_CONFIG="$HOME/.profile"
     fi
 
-    if grep -q "alias autorename-pdf=" "$SHELL_CONFIG" 2>/dev/null; then
+    if grep -q "alias autorename=" "$SHELL_CONFIG" 2>/dev/null; then
         print_warning "Alias already exists in $SHELL_CONFIG"
     else
         echo "" >> "$SHELL_CONFIG"
@@ -187,6 +187,9 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
         echo "$ALIAS_CMD" >> "$SHELL_CONFIG"
         print_status "Alias added to $SHELL_CONFIG"
         print_warning "Run 'source $SHELL_CONFIG' or restart your terminal to use the alias"
+    fi
+    if ! grep -q "alias autorename-pdf=" "$SHELL_CONFIG" 2>/dev/null; then
+        echo "alias autorename-pdf='autorename' # compatibility alias" >> "$SHELL_CONFIG"
     fi
 fi
 
@@ -196,7 +199,7 @@ echo -e "${GREEN}AutoRename-PDF is installed and ready to use.${NC}\n"
 echo "Next steps:"
 echo "  1. Edit config.yaml and add your AI provider API key"
 echo "  2. Activate the virtual environment: ${BLUE}source venv/bin/activate${NC}"
-echo "  3. Test with a PDF: ${BLUE}python autorename-pdf.py --dry-run your-file.pdf${NC}"
+echo "  3. Test with a PDF: ${BLUE}autorename --dry-run your-file.pdf${NC}"
 echo ""
 echo "Documentation: https://github.com/ptmrio/autorename-pdf"
 echo "Issues: https://github.com/ptmrio/autorename-pdf/issues"
