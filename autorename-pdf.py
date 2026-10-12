@@ -68,6 +68,7 @@ class FileResult:
     new_name: Optional[str] = None
     new_path: Optional[str] = None
     error: Optional[str] = None
+    error_type: Optional[str] = None
     warnings: list = field(default_factory=list)
     company: Optional[str] = None
     date: Optional[str] = None
@@ -422,6 +423,15 @@ def process_pdf(
         return result
 
     except Exception as e:
+        if getattr(e, "status_code", None) in (401, 403):
+            result.error_type = "auth_error"
+            result.error = f"{provider} authorization failed (HTTP {e.status_code}). Check the API key and project model-request permissions."
+            if provider == "openai":
+                result.error += " Set OPENAI_API_KEY; Model capabilities Request (model.request) must be allowed."
+            logging.error(result.error)
+            if output:
+                _step(output, "\u2717", "red", result.error)
+            return result
         logging.error(f"Error processing {pdf_path}: {e}")
         logging.debug(traceback.format_exc())
         if output:
@@ -879,7 +889,7 @@ def _handle_rename(args: argparse.Namespace, output_format: str) -> None:
         config_path = args.config_path
 
     # Load config
-    config = load_yaml_config(config_path)
+    config = load_yaml_config(config_path, provider=getattr(args, "provider", None))
     if not config:
         error_exit(
             "config_error",
@@ -943,6 +953,7 @@ def _handle_rename(args: argparse.Namespace, output_format: str) -> None:
         console.print("[bold]Dry run[/bold] [dim]no files will be renamed[/]\n")
 
     total = len(pdf_files)
+    auth_failed = False
     for i, pdf_path in enumerate(pdf_files, 1):
         filename = normalize_unicode(os.path.basename(pdf_path))
         if show_text:
@@ -964,10 +975,22 @@ def _handle_rename(args: argparse.Namespace, output_format: str) -> None:
         else:
             failed += 1
 
+        if file_result.error_type == "auth_error":
+            auth_failed = True
+            for remaining in pdf_files[i:]:
+                file_results.append(FileResult(
+                    file=normalize_unicode(os.path.abspath(remaining).replace("\\", "/")),
+                    status="failed", error_type="not_attempted",
+                    error="Not attempted because provider authorization failed.",
+                    provider=config["ai"]["provider"], model=config["ai"]["model"],
+                ))
+                failed += 1
+            break
+
     # When every file was skipped (already correctly named), write an empty
     # batch so that a subsequent "undo" targets this no-op batch instead of
     # silently reverting an earlier rename run.
-    if renamed == 0 and skipped > 0 and undo_log_path and batch_id:
+    if renamed == 0 and failed == 0 and skipped > 0 and undo_log_path and batch_id:
         write_empty_batch(undo_log_path, batch_id)
 
     batch = BatchResult(
@@ -998,6 +1021,8 @@ def _handle_rename(args: argparse.Namespace, output_format: str) -> None:
                 parts.append(f"[red]{failed} failed[/]")
             console.print(f"\n[bold]Done:[/bold] {', '.join(parts)}")
 
+    if auth_failed:
+        sys.exit(ExitCode.AUTH_ERROR)
     if failed > 0 and failed < total:
         sys.exit(ExitCode.PARTIAL_FAILURE)
     elif failed == total:

@@ -44,7 +44,7 @@ Functional Python (no classes). Modules prefixed with `_` are internal:
 | Module | Purpose |
 |--------|---------|
 | `autorename-pdf.py` | Entry point, CLI (argparse), orchestration |
-| `_ai_processing.py` | Multi-provider AI via instructor, structured output (Pydantic) |
+| `_ai_processing.py` | OpenAI Responses plus instructor-compatible providers, Pydantic output |
 | `_pdf_utils.py` | Text extraction (pdfplumber), image rendering (pypdfium2), PaddleOCR bridge, standalone image extraction |
 | `_apple_vision.py` | Optional macOS Apple Vision OCR/classification and VNCoreMLRequest hints |
 | `_paddleocr_bridge.py` | Subprocess bridge script for PaddleOCR venv |
@@ -75,7 +75,7 @@ Supports 5 providers via `ai.provider` config key:
 | `xai` | openai (base_url) | Grok models |
 | `ollama` | openai (base_url) | Local models, no API key needed |
 
-All providers use `instructor` for structured Pydantic output. Anthropic uses native SDK because their OpenAI compat layer ignores structured output.
+OpenAI uses native Responses structured output with response storage disabled. Other providers use `instructor` for structured Pydantic output. Anthropic uses native SDK because their OpenAI compat layer ignores structured output.
 
 ## Three-Tier Extraction
 

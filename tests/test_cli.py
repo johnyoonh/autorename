@@ -1154,3 +1154,93 @@ class TestGetBaseDirectory:
             with patch.object(sys, "executable", "/path/to/autorename-pdf.exe"):
                 result = get_base_directory(None)
         assert result == "/path/to"
+
+
+@pytest.mark.parametrize('status', [401, 403])
+def test_auth_failure_stops_batch_and_preserves_json_contract(sample_config, capsys, status):
+    import httpx
+    from openai import OpenAI
+    from _pdf_utils import ExtractionResult
+    from _ai_processing import DocumentMetadata
+
+    requests = []
+    def handle(request):
+        requests.append(request)
+        return httpx.Response(status, json={'error': {'message': 'synthetic-secret-key must never reach logs', 'type': 'invalid_request_error', 'code': 'missing_scope'}})
+    def client_factory(**kwargs):
+        return OpenAI(api_key='synthetic', http_client=httpx.Client(transport=httpx.MockTransport(handle)), max_retries=2)
+    args = argparse.Namespace(config_path=None, paths=['/tmp/a.pdf', '/tmp/b.pdf'], dry_run=True,
+                              recursive=False, quiet=True, provider=None, model=None,
+                              vision=False, text_only=False, ocr=False, output='json')
+    with patch('autorename_pdf.load_yaml_config', return_value=sample_config), \
+         patch('autorename_pdf.get_base_directory', return_value='/fake'), \
+         patch('autorename_pdf.collect_pdf_files', return_value=args.paths), \
+         patch('autorename_pdf.extract_content', return_value=ExtractionResult(text='Synthetic invoice', images=[], sources=['text'])), \
+         patch('_ai_processing.OpenAI', side_effect=client_factory), \
+         patch('autorename_pdf.rename_invoice') as rename, \
+         pytest.raises(SystemExit) as exc:
+        _handle_rename(args, 'json')
+    assert exc.value.code == ExitCode.AUTH_ERROR
+    assert len(requests) == 1
+    rename.assert_not_called()
+    captured = capsys.readouterr()
+    assert 'synthetic-secret-key' not in captured.out + captured.err
+    data = json.loads(captured.out)
+    assert_batch_result_schema(data)
+    assert data['failed'] == data['total'] == 2
+    assert data['files'][0]['error_type'] == 'auth_error'
+    assert data['files'][1]['error_type'] == 'not_attempted'
+
+
+def test_cli_provider_override_precedes_env_and_explicit_model_is_last(tmp_path, monkeypatch, capsys):
+    path = tmp_path / 'config.yaml'
+    path.write_text('config_version: 2\nai:\n  provider: anthropic\n  api_key: configured-key\n  model: configured-model\n')
+    monkeypatch.setenv('OPENAI_API_KEY', 'openai-env-key')
+    monkeypatch.setenv('OPENAI_EVERDAY_MODEL', 'openai-env-model')
+    args = argparse.Namespace(config_path=str(path), paths=['/tmp/a.pdf'], dry_run=True,
+                              recursive=False, quiet=True, provider='openai', model='explicit-model',
+                              vision=False, text_only=False, ocr=False, output='json')
+    def process(path, config, *unused, **kwargs):
+        assert config['ai']['provider'] == 'openai'
+        assert config['ai']['api_key'] == 'openai-env-key'
+        assert config['ai']['model'] == 'explicit-model'
+        return FileResult(file=path, status='skipped')
+    with patch('autorename_pdf.collect_pdf_files', return_value=args.paths), patch('autorename_pdf.process_pdf', side_effect=process), pytest.raises(SystemExit) as exc:
+        _handle_rename(args, 'json')
+    assert exc.value.code == 0
+
+
+def test_auth_failure_after_success_preserves_undo(tmp_path, sample_config, capsys):
+    import httpx
+    from openai import OpenAI
+    from _pdf_utils import ExtractionResult
+    from tests.test_openai_responses import _response
+    requests = []
+    files = [tmp_path / name for name in ('a.pdf', 'b.pdf', 'c.pdf')]
+    for path in files:
+        path.write_bytes(b'synthetic document')
+    def handle(request):
+        requests.append(request)
+        if len(requests) == 1:
+            return httpx.Response(200, json=_response())
+        return httpx.Response(401, json={'error': {'message': 'Missing model.request', 'type': 'invalid_request_error', 'code': 'missing_scope'}})
+    def client_factory(**kwargs):
+        return OpenAI(api_key='synthetic', http_client=httpx.Client(transport=httpx.MockTransport(handle)))
+    args = argparse.Namespace(config_path=None, paths=[str(p) for p in files], dry_run=False,
+                              recursive=False, quiet=True, provider=None, model=None,
+                              vision=False, text_only=False, ocr=False, output='json')
+    with patch('autorename_pdf.load_yaml_config', return_value=sample_config), \
+         patch('autorename_pdf.get_base_directory', return_value=str(tmp_path)), \
+         patch('autorename_pdf.collect_pdf_files', return_value=args.paths), \
+         patch('autorename_pdf.extract_content', return_value=ExtractionResult(text='Synthetic invoice', images=[], sources=['text'])), \
+         patch('_ai_processing.OpenAI', side_effect=client_factory), pytest.raises(SystemExit) as exc:
+        _handle_rename(args, 'json')
+    assert exc.value.code == ExitCode.AUTH_ERROR
+    data = json.loads(capsys.readouterr().out)
+    assert data['renamed'] == 1 and data['failed'] == 2
+    assert len(requests) == 2
+    assert not files[0].exists()
+    assert files[1].exists() and files[2].exists()
+    restored, failed, _ = _mod.undo_renames(str(tmp_path / '.autorename-log.json'))
+    assert (restored, failed) == (1, 0)
+    assert all(path.read_bytes() == b'synthetic document' for path in files)

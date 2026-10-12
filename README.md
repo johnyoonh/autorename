@@ -90,19 +90,22 @@ ai:
 
 ```yaml
 ai:
+  provider: "openai"
   api_key: "${OPENAI_API_KEY}"
+  model: "${OPENAI_EVERDAY_MODEL}"
 ```
 
 Then create a `.env` file next to your `config.yaml`:
 
 ```
 OPENAI_API_KEY=sk-your-actual-key-here
+OPENAI_EVERDAY_MODEL=gpt-5.4-mini
 ANTHROPIC_API_KEY=sk-ant-your-key-here
 ```
 
-The `${VAR_NAME}` syntax works in any string value in `config.yaml`. A `.env` file placed next to `config.yaml` is loaded automatically.
+The `${VAR_NAME}` syntax works in any string value in `config.yaml`. A `.env` file placed next to `config.yaml` is loaded automatically without replacing values already exported by your shell. For OpenAI, `OPENAI_API_KEY` and `OPENAI_EVERDAY_MODEL` override legacy YAML values when set; `OPENAI_EVERYDAY_MODEL` is a fallback spelling for the model. Explicit `--model` still takes precedence. Other providers retain their configured values.
 
-> **Tip:** Method 2 lets you store all your API keys in `.env` and switch providers in `config.yaml` by just changing the `${VAR_NAME}` reference. See `.env.example` for a template.
+> **Tip:** Method 2 lets you store all your API keys in `.env` and switch providers in `config.yaml` by just changing the `${VAR_NAME}` reference. See [OpenAI environment example](docs/openai-environment.example) for a template.
 
 ### Recommended Setups
 
@@ -518,7 +521,7 @@ Functional Python (no classes). Modules prefixed with `_` are internal:
 | Module | Purpose |
 |--------|---------|
 | `autorename-pdf.py` | Entry point, CLI (argparse), orchestration |
-| `_ai_processing.py` | Multi-provider AI via instructor, structured output (Pydantic) |
+| `_ai_processing.py` | OpenAI Responses and compatible providers, structured output (Pydantic) |
 | `_pdf_utils.py` | Text extraction (pdfplumber), image rendering (pypdfium2), PaddleOCR bridge |
 | `_paddleocr_bridge.py` | Subprocess bridge script for PaddleOCR venv |
 | `_document_processing.py` | Company harmonization (rapidfuzz), renaming, undo log |
@@ -527,11 +530,13 @@ Functional Python (no classes). Modules prefixed with `_` are internal:
 
 ## AI Providers (Technical)
 
-All providers use [instructor](https://github.com/jxnl/instructor) for structured Pydantic output.
+OpenAI uses native [Responses structured output](https://developers.openai.com/api/docs/guides/structured-outputs) through `responses.parse(text_format=DocumentMetadata)` for text, images, and mixed inputs. Response storage is disabled (`store=False`), and OpenAI sampling parameters use the selected model’s defaults. Other providers retain [instructor](https://github.com/jxnl/instructor) for structured Pydantic output.
+
+OpenAI HTTP 401/403 stops the rename batch and returns exit code 11. JSON marks the rejected file as `auth_error` and remaining files as `not_attempted`; earlier successful renames and undo records are preserved. Fix `OPENAI_API_KEY` and the project/key model-request permissions before retrying. A dry run still calls the provider, but does not rename files.
 
 | Provider | SDK | Notes |
 |----------|-----|-------|
-| `openai` | openai (native) | Default |
+| `openai` | openai (native) | Responses API, strict schema parsing |
 | `anthropic` | anthropic (native) | Uses `instructor.from_anthropic()` — Anthropic's OpenAI compat layer ignores structured output |
 | `gemini` | openai (base_url) | Google's OpenAI-compatible endpoint |
 | `xai` | openai (base_url) | Grok models |
@@ -540,6 +545,7 @@ All providers use [instructor](https://github.com/jxnl/instructor) for structure
 ## Testing
 
 ```bash
+python tests/generate_test_pdfs.py  # synthetic fixtures, ignored by Git
 pytest tests/ -v --cov
 ```
 

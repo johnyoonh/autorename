@@ -1,6 +1,6 @@
 """
 AI content processing with multi-provider support via instructor.
-Supports OpenAI, Anthropic (native), Gemini, xAI, and Ollama.
+OpenAI uses native Responses structured output; other providers use instructor.
 """
 from __future__ import annotations
 
@@ -148,8 +148,36 @@ def build_image_content(images: list, provider: str) -> list[dict]:
     ]
 
 
+def _extract_openai_metadata(text: str, images: list, config: dict) -> DocumentMetadata:
+    """Parse a strict metadata schema through the native Responses API."""
+    settings = config["ai"]
+    api_key = settings.get("api_key", "")
+    if not api_key or api_key.startswith("${"):
+        raise ValueError("Set OPENAI_API_KEY to a valid OpenAI API key.")
+    content = [{"type": "input_text", "text": text or "Extract document metadata from these page images:"}]
+    content.extend({"type": "input_image", "image_url": pil_to_base64_data_uri(image)} for image in images)
+    with OpenAI(
+        api_key=api_key,
+        base_url=settings.get("base_url") or None,
+        max_retries=settings.get("max_retries", 2),
+        timeout=60.0,
+    ) as client:
+        response = client.responses.parse(
+            model=settings["model"],
+            instructions=build_system_prompt(config),
+            input=[{"role": "user", "content": content}],
+            text_format=DocumentMetadata,
+            store=False,
+        )
+    if response.status != "completed" or response.output_parsed is None:
+        raise RuntimeError("OpenAI response did not contain completed structured document metadata.")
+    return response.output_parsed
+
+
 def extract_metadata_from_text(text: str, config: dict) -> DocumentMetadata:
     """Extract document metadata from text using an LLM."""
+    if config["ai"]["provider"] == "openai":
+        return _extract_openai_metadata(text, [], config)
     client = get_instructor_client(config)
     provider = config["ai"]["provider"]
 
@@ -173,6 +201,8 @@ def extract_metadata_from_text(text: str, config: dict) -> DocumentMetadata:
 
 def extract_metadata_from_images(images: list, config: dict) -> DocumentMetadata:
     """Extract document metadata from page images using a vision-capable LLM."""
+    if config["ai"]["provider"] == "openai":
+        return _extract_openai_metadata("", images, config)
     client = get_instructor_client(config)
     provider = config["ai"]["provider"]
 
@@ -214,6 +244,8 @@ def extract_metadata_from_text_and_images(
     text: str, images: list, config: dict
 ) -> DocumentMetadata:
     """Extract metadata from combined text + page images (multimodal)."""
+    if config["ai"]["provider"] == "openai":
+        return _extract_openai_metadata(text, images, config)
     client = get_instructor_client(config)
     provider = config["ai"]["provider"]
 

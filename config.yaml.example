@@ -4,11 +4,11 @@
 # AI Provider Configuration
 ai:
   provider: "openai"              # openai, anthropic, gemini, xai, ollama
-  model: "${OPEN_SHARED_MODEL}"   # Set OPEN_SHARED_MODEL in the user environment
+  model: "${OPENAI_EVERDAY_MODEL}" # OPENAI_EVERYDAY_MODEL also accepted
   api_key: "${OPENAI_API_KEY}"    # Not needed for ollama
   base_url: ""                    # Custom base URL (optional, for proxies)
-  temperature: 0.0                # 0.0 = deterministic
-  max_retries: 2                  # Retry failed API calls
+  temperature: 0.0                # Compatible providers only; OpenAI uses model defaults
+  max_retries: 2                  # OpenAI: bounded SDK retries for transient failures
 
 # --- API Key Options ---
 # You can store your API key in two ways:
@@ -24,7 +24,7 @@ ai:
 #   ANTHROPIC_API_KEY=sk-ant-your-key-here
 #
 # Any string value in this file can reference env vars with ${VAR_NAME}.
-# See .env.example for a template.
+# See docs/openai-environment.example for an OpenAI template.
 
 # PDF Processing
 pdf:

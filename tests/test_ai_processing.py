@@ -162,8 +162,9 @@ class TestExtractMetadataProviderKwargs:
 
     @patch("_ai_processing.get_instructor_client")
     @patch("_ai_processing.build_system_prompt", return_value="test prompt")
-    def test_openai_no_max_tokens(self, mock_prompt, mock_client, sample_config):
-        """OpenAI provider does NOT include max_tokens."""
+    def test_gemini_no_max_tokens(self, mock_prompt, mock_client, sample_config):
+        """Compatible provider kwargs remain unchanged by the Responses migration."""
+        sample_config["ai"]["provider"] = "gemini"
         mock_completions = MagicMock()
         mock_completions.create.return_value = DocumentMetadata(
             company_name="Test", document_date="01.01.2024", document_type="ER"
@@ -179,7 +180,8 @@ class TestExtractMetadataProviderKwargs:
     @patch("_ai_processing.get_instructor_client")
     @patch("_ai_processing.build_system_prompt", return_value="test prompt")
     def test_vision_extraction_kwargs(self, mock_prompt, mock_client, sample_config):
-        """Vision extraction sends image_url content blocks."""
+        """Compatible-provider vision extraction retains image_url blocks."""
+        sample_config["ai"]["provider"] = "gemini"
         from PIL import Image
         mock_completions = MagicMock()
         mock_completions.create.return_value = DocumentMetadata(

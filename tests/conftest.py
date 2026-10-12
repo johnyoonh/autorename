@@ -21,6 +21,14 @@ sys.path.insert(0, PROJECT_DIR)
 from _pdf_utils import _paddleocr_available
 
 
+@pytest.fixture(autouse=True)
+def isolate_openai_environment(request, monkeypatch):
+    """Synthetic checks must not depend on a developer's model or credential."""
+    if request.node.get_closest_marker("live") is None:
+        for name in ("OPENAI_API_KEY", "OPENAI_EVERDAY_MODEL", "OPENAI_EVERYDAY_MODEL"):
+            monkeypatch.delenv(name, raising=False)
+
+
 # --- Live test prerequisite helpers ---
 
 _paddleocr_cached = None
@@ -388,7 +396,7 @@ def openai_config():
         pytest.skip("OPENAI_API_KEY not set")
     config = _base_live_config()
     config["ai"]["provider"] = "openai"
-    config["ai"]["model"] = "gpt-5.4-mini"
+    config["ai"]["model"] = os.environ.get("OPENAI_EVERDAY_MODEL") or os.environ.get("OPENAI_EVERYDAY_MODEL") or "gpt-5.4-mini"
     config["ai"]["api_key"] = key
     return config
 
