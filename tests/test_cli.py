@@ -1161,6 +1161,7 @@ class TestGetBaseDirectory:
     (401, 'missing_scope', 'synthetic-secret-key', 'model.request', 'invalid API key'),
     (403, None, 'Missing scopes: model.request synthetic-secret-key', 'model.request', 'invalid API key'),
     (401, None, 'synthetic-secret-key', 'Check OPENAI_API_KEY', 'must be allowed'),
+    (401, None, 'Missing scopes: api.responses.write synthetic-secret-key', 'api.responses.write', 'model.request'),
 ])
 def test_auth_failure_stops_batch_and_preserves_json_contract(sample_config, capsys, caplog, status, code, message, expected, unexpected):
     import httpx
