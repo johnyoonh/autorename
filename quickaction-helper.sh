@@ -45,6 +45,12 @@ if [ ! -f "$CONFIG_FILE" ]; then
     exit 1
 fi
 
+preview_args=()
+if [ "${1:-}" = "--preview" ]; then
+    preview_args=(--dry-run)
+    shift
+fi
+
 supported=()
 unsupported=0
 for filepath in "$@"; do
@@ -79,11 +85,13 @@ output_file="$(mktemp -t autorename-finder.XXXXXX)"
 trap 'rm -f "$output_file"' EXIT
 
 "$PYTHON_BIN" "$PYTHON_SCRIPT" rename \
-    --config "$CONFIG_FILE" --output json --quiet -- "${supported[@]}" \
+    --config "$CONFIG_FILE" --output json --quiet ${preview_args[@]+"${preview_args[@]}"} -- "${supported[@]}" \
     > "$output_file" 2>> "$LOG_FILE"
 status=$?
+cat "$output_file" >> "$LOG_FILE"
+printf "\n" >> "$LOG_FILE"
 
-summary="$($PYTHON_BIN - "$output_file" <<'PY'
+summary="$("$PYTHON_BIN" - "$output_file" <<'PY'
 import json
 import sys
 
@@ -99,7 +107,7 @@ skipped = data.get("skipped", 0)
 failed = data.get("failed", 0)
 parts = []
 if renamed:
-    parts.append(f"{renamed} renamed")
+    parts.append(f"{renamed} proposed" if data.get("dry_run") else f"{renamed} renamed")
 if skipped:
     parts.append(f"{skipped} unchanged")
 if failed:

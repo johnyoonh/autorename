@@ -27,3 +27,7 @@ gui/dist/
 gui/src-tauri/target/
 gui/assets/css/output.css
 gui/src-tauri/autorename-pdf-cli-*.exe
+
+# Local agent guidance is kept out of public pushes.
+/AGENTS.md
+/CLAUDE.md

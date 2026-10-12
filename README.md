@@ -198,13 +198,22 @@ Standalone image files (`.png`, `.jpg`, `.jpeg`, `.tif`, `.tiff`, `.bmp`, `.gif`
 
 ### macOS Finder
 
-The Finder Quick Action can pass selected PDFs and standalone images to `quickaction-helper.sh`. Configure the workflow to receive `com.adobe.pdf` and `public.image`, and run:
+Install two Finder Quick Actions from a stable checkout after running `setup.sh` and configuring `config.yaml`:
 
 ```bash
-path/to/autorename/quickaction-helper.sh "$@"
+python3 install-finder-actions.py                 # preview installation
+python3 install-finder-actions.py --apply         # install
+python3 install-finder-actions.py --apply --replace  # back up and replace old actions
 ```
 
-Select one or more supported files in Finder, then choose **Quick Actions > Rename with AutoRename**. The helper uses the project's `.venv`, preserves each file's extension, reports the batch result through a macOS notification, and writes diagnostics to `$HOME/Library/Logs/AutoRename-Finder.log`.
+Select PDFs or supported images in Finder, then choose **Quick Actions** (or **Services**):
+
+- **Preview AutoRename** proposes names without renaming files.
+- **Rename with AutoRename** explicitly applies renames in place.
+
+The installer records the checkout path locally and selects its `.venv` or `venv` Python. Use `--repo /path/to/stable/checkout` when running the installer from a temporary development worktree. Reinstall if you move the checkout. Existing actions are preserved unless `--replace` is supplied; replacements keep uniquely named backups in the Services folder.
+
+Both actions use `quickaction-helper.sh`, preserve file extensions, report batch results through macOS notifications, and log diagnostics to `$HOME/Library/Logs/AutoRename-Finder.log`. Preview details appear in that log. Unsupported files are skipped. Provider settings come from the existing local configuration; no routing or inbox action is installed.
 
 ### GUI
 
