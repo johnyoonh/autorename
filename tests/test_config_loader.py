@@ -424,3 +424,50 @@ def test_openai_dotenv_overlay_and_exported_environment_precedence(tmp_path, mon
     result = load_yaml_config(str(path))
     assert result['ai']['api_key'] == 'exported-key'
     assert result['ai']['model'] == 'exported-model'
+
+
+def test_bwa_source_overrides_stale_environment_and_yaml(tmp_path, monkeypatch):
+    import subprocess
+    monkeypatch.setenv('OPENAI_API_KEY', 'stale-export')
+    path = tmp_path / 'config.yaml'
+    path.write_text('config_version: 2\nai:\n  provider: openai\n  api_key_source: bwa\n  api_key: stale-yaml\n')
+    (tmp_path / '.env').write_text('OPENAI_API_KEY=stale-dotenv\n')
+    def run(command, **kwargs):
+        assert command == ['bwa', 'env', 'OPENAI_API_KEY']
+        assert kwargs['timeout'] == 30
+        assert kwargs['stdin'] == subprocess.DEVNULL
+        return subprocess.CompletedProcess(command, 0, "export OPENAI_API_KEY='synthetic-vault-key'\n", '')
+    monkeypatch.setattr(subprocess, 'run', run)
+    result = load_yaml_config(str(path))
+    assert result['ai']['api_key'] == 'synthetic-vault-key'
+    assert __import__('os').environ['OPENAI_API_KEY'] == 'stale-export'
+
+
+@pytest.mark.parametrize('failure', ['missing', 'timeout', 'locked', 'empty', 'malformed'])
+def test_bwa_failure_does_not_fall_back_or_leak_secrets(tmp_path, monkeypatch, caplog, failure):
+    import subprocess
+    monkeypatch.setenv('OPENAI_API_KEY', 'stale-export')
+    path = tmp_path / 'config.yaml'
+    path.write_text('config_version: 2\nai:\n  provider: openai\n  api_key_source: bwa\n  api_key: stale-yaml\n')
+    def run(command, **kwargs):
+        if failure == 'missing':
+            raise FileNotFoundError('synthetic-secret')
+        if failure == 'timeout':
+            raise subprocess.TimeoutExpired(command, 30, output='synthetic-secret')
+        output = {'locked': 'synthetic-secret', 'empty': "export OPENAI_API_KEY=''", 'malformed': 'synthetic-secret'}[failure]
+        return subprocess.CompletedProcess(command, int(failure == 'locked'), output, 'synthetic-secret')
+    monkeypatch.setattr(subprocess, 'run', run)
+    assert load_yaml_config(str(path)) is None
+    assert 'bwa' in caplog.text
+    assert 'synthetic-secret' not in caplog.text
+
+
+def test_bwa_source_not_used_for_other_effective_provider(tmp_path, monkeypatch):
+    import subprocess
+    path = tmp_path / 'config.yaml'
+    path.write_text('config_version: 2\nai:\n  provider: openai\n  api_key_source: bwa\n  api_key: configured-key\n')
+    def run(*args, **kwargs):
+        pytest.fail('bwa must not run for another effective provider')
+    monkeypatch.setattr(subprocess, 'run', run)
+    result = load_yaml_config(str(path), provider='anthropic')
+    assert result['ai']['api_key'] == 'configured-key'

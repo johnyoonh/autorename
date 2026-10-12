@@ -436,7 +436,9 @@ def process_pdf(
                 message = str(error.get("message", ""))
                 prefix = f"openai authorization failed (HTTP {e.status_code}). "
                 if code == "invalid_api_key":
-                    result.error = prefix + "OpenAI rejected an invalid API key. Replace OPENAI_API_KEY in your shell or the .env next to config.yaml."
+                    result.error = prefix + "OpenAI rejected an invalid API key. Replace OPENAI_API_KEY in your configured credential source (bwa, shell, or .env)."
+                elif "api.responses.write" in message:
+                    result.error = prefix + "Responses write (api.responses.write) must be allowed for the API key and project role."
                 elif code == "missing_scope" or "model.request" in message:
                     result.error = prefix + "Model capabilities Request (model.request) must be allowed for the API key and project role."
                 else:
