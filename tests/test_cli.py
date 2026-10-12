@@ -1156,8 +1156,13 @@ class TestGetBaseDirectory:
         assert result == "/path/to"
 
 
-@pytest.mark.parametrize('status', [401, 403])
-def test_auth_failure_stops_batch_and_preserves_json_contract(sample_config, capsys, status):
+@pytest.mark.parametrize('status,code,message,expected,unexpected', [
+    (401, 'invalid_api_key', 'Incorrect API key: synthetic-secret-key', 'invalid API key', 'model.request'),
+    (401, 'missing_scope', 'synthetic-secret-key', 'model.request', 'invalid API key'),
+    (403, None, 'Missing scopes: model.request synthetic-secret-key', 'model.request', 'invalid API key'),
+    (401, None, 'synthetic-secret-key', 'Check OPENAI_API_KEY', 'must be allowed'),
+])
+def test_auth_failure_stops_batch_and_preserves_json_contract(sample_config, capsys, caplog, status, code, message, expected, unexpected):
     import httpx
     from openai import OpenAI
     from _pdf_utils import ExtractionResult
@@ -1166,7 +1171,7 @@ def test_auth_failure_stops_batch_and_preserves_json_contract(sample_config, cap
     requests = []
     def handle(request):
         requests.append(request)
-        return httpx.Response(status, json={'error': {'message': 'synthetic-secret-key must never reach logs', 'type': 'invalid_request_error', 'code': 'missing_scope'}})
+        return httpx.Response(status, json={'error': {'message': message, 'type': 'invalid_request_error', 'code': code}})
     def client_factory(**kwargs):
         return OpenAI(api_key='synthetic', http_client=httpx.Client(transport=httpx.MockTransport(handle)), max_retries=2)
     args = argparse.Namespace(config_path=None, paths=['/tmp/a.pdf', '/tmp/b.pdf'], dry_run=True,
@@ -1184,11 +1189,13 @@ def test_auth_failure_stops_batch_and_preserves_json_contract(sample_config, cap
     assert len(requests) == 1
     rename.assert_not_called()
     captured = capsys.readouterr()
-    assert 'synthetic-secret-key' not in captured.out + captured.err
+    assert 'synthetic-secret-key' not in captured.out + captured.err + caplog.text
     data = json.loads(captured.out)
     assert_batch_result_schema(data)
     assert data['failed'] == data['total'] == 2
     assert data['files'][0]['error_type'] == 'auth_error'
+    assert expected in data['files'][0]['error']
+    assert unexpected not in data['files'][0]['error']
     assert data['files'][1]['error_type'] == 'not_attempted'
 
 

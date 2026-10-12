@@ -427,7 +427,20 @@ def process_pdf(
             result.error_type = "auth_error"
             result.error = f"{provider} authorization failed (HTTP {e.status_code}). Check the API key and project model-request permissions."
             if provider == "openai":
-                result.error += " Set OPENAI_API_KEY; Model capabilities Request (model.request) must be allowed."
+                # Classify the rejection without echoing provider messages, which
+                # may contain credential fragments or other private details.
+                body = getattr(e, "body", None)
+                error = body.get("error", body) if isinstance(body, dict) else {}
+                error = error if isinstance(error, dict) else {}
+                code = error.get("code")
+                message = str(error.get("message", ""))
+                prefix = f"openai authorization failed (HTTP {e.status_code}). "
+                if code == "invalid_api_key":
+                    result.error = prefix + "OpenAI rejected an invalid API key. Replace OPENAI_API_KEY in your shell or the .env next to config.yaml."
+                elif code == "missing_scope" or "model.request" in message:
+                    result.error = prefix + "Model capabilities Request (model.request) must be allowed for the API key and project role."
+                else:
+                    result.error = prefix + "Check OPENAI_API_KEY and project access."
             logging.error(result.error)
             if output:
                 _step(output, "\u2717", "red", result.error)
