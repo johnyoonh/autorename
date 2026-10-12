@@ -532,7 +532,7 @@ Functional Python (no classes). Modules prefixed with `_` are internal:
 
 OpenAI uses native [Responses structured output](https://developers.openai.com/api/docs/guides/structured-outputs) through `responses.parse(text_format=DocumentMetadata)` for text, images, and mixed inputs. Response storage is disabled (`store=False`), and OpenAI sampling parameters use the selected model’s defaults. Other providers retain [instructor](https://github.com/jxnl/instructor) for structured Pydantic output.
 
-OpenAI HTTP 401/403 stops the rename batch and returns exit code 11. JSON marks the rejected file as `auth_error` and remaining files as `not_attempted`; earlier successful renames and undo records are preserved. Fix `OPENAI_API_KEY` and the project/key model-request permissions before retrying. A dry run still calls the provider, but does not rename files.
+OpenAI HTTP 401/403 stops the rename batch and returns exit code 11. JSON marks the rejected file as `auth_error` and remaining files as `not_attempted`; earlier successful renames and undo records are preserved. An `invalid_api_key` rejection requires replacing `OPENAI_API_KEY`; a missing `model.request` scope requires correcting the key/project role permissions. A dry run still calls the provider, but does not rename files.
 
 | Provider | SDK | Notes |
 |----------|-----|-------|
