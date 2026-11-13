@@ -20,8 +20,8 @@ import yaml
 _ENV_VAR_PATTERN = re.compile(r"\$\{([^}]+)\}")
 
 
-def _read_key_from_bwa_cache(name: str) -> str | None:
-    """Read a credential from bwa's daily environment cache file if valid."""
+def _read_key_from_bwa_cache(name: str, max_age_days: int = 30) -> str | None:
+    """Read a credential from bwa's environment cache file if within max_age_days."""
     if "pytest" in sys.modules and not os.environ.get("TEST_BWA_CACHE"):
         return None
     cache_path = Path(os.environ.get("BW_ENV_CACHE_FILE", "~/.cache/bwa/env.zsh")).expanduser()
@@ -31,9 +31,15 @@ def _read_key_from_bwa_cache(name: str) -> str | None:
         content = cache_path.read_text(encoding="utf-8")
     except OSError:
         return None
-    today = dt.date.today().isoformat()
     date_match = re.search(r"export\s+BWA_ENV_CACHE_DATE=['\"]?([0-9-]+)['\"]?", content)
-    if not date_match or date_match.group(1) != today:
+    if not date_match:
+        return None
+    try:
+        cache_date = dt.date.fromisoformat(date_match.group(1))
+    except ValueError:
+        return None
+    age_days = (dt.date.today() - cache_date).days
+    if age_days < 0 or age_days > max_age_days:
         return None
     key_match = re.search(rf"export\s+{re.escape(name)}=['\"]([^'\"]+)['\"]", content)
     if key_match:

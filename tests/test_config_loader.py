@@ -526,3 +526,12 @@ def test_bwa_cache_fast_path(tmp_path, monkeypatch):
     config = load_yaml_config(str(path))
     assert config['ai']['api_key'] == 'cached-fast-key'
 
+    # Cache from previous days (<= 30 days) remains valid across midnight rollover
+    yesterday = (dt.date.today() - dt.timedelta(days=5)).isoformat()
+    cache_file.write_text(
+        f"export BWA_ENV_CACHE_DATE='{yesterday}'\n"
+        "export OPENAI_AUTORENAME_API_KEY='cached-rollover-key'\n"
+    )
+    config_rollover = load_yaml_config(str(path))
+    assert config_rollover['ai']['api_key'] == 'cached-rollover-key'
+
