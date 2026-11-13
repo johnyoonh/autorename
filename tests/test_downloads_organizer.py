@@ -118,3 +118,17 @@ def test_collision_is_sent_to_review_without_overwrite(tmp_path):
     assert results[0].status == "review"
     assert image.exists()
     assert target.read_bytes() == b"existing"
+
+
+def test_classifies_canonical_pdf_without_renamer(tmp_path):
+    source = tmp_path / "Downloads"
+    destination = tmp_path / "Archive"
+    source.mkdir()
+    pdf = source / "20260301 ACME Invoice.pdf"
+    pdf.write_bytes(b"pdf")
+    age(pdf, 40)
+
+    results = organize_files(source, destination, 30, apply=False, pdf_renamer=None, now=NOW)
+
+    assert results[0].category == "Financial"
+    assert Path(results[0].destination) == destination / "Documents" / "Financial" / "2026" / "20260301 ACME Invoice.pdf"

@@ -79,12 +79,37 @@ def parse_document_date(date_str: str) -> datetime.date | None:
     return None
 
 
-def extract_source_timestamp(path: str) -> tuple[datetime.datetime | None, str | None]:
-    """Extract a timestamp already present in common screenshot filenames.
+_CANONICAL_NAME_RE = re.compile(r"^((?:19|20)\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\s+\S.*$")
+_DUP_SUFFIX_RE = re.compile(r"(?:\(\d+\)|\s+\d+)$")
+_FILENAME_DATE_PATTERNS = (
+    re.compile(r"(?:^|(?<!\d))((?:19|20)\d{2})[-_.](0[1-9]|1[0-2])[-_.](0[1-9]|[12]\d|3[01])(?!\d)"),
+    re.compile(r"(?:^|(?<!\d))((?:19|20)\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])(?:\d{6,9})?(?!\d)"),
+    re.compile(r"(?:^|(?<!\d))(0?[1-9]|1[0-2])[-_](0?[1-9]|[12]\d|3[01])[-_]((?:19|20)\d{2})(?!\d)"),
+    re.compile(r"(?:^|(?<!\d))(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])((?:19|20)\d{2})(?!\d)"),
+)
 
-    Returns a datetime plus a normalized filename token that preserves time-of-day.
-    The token is intentionally useful for image filenames, e.g.
-    ``20240102_142144``.
+
+def is_already_canonically_named(filename: str) -> bool:
+    """Return True if filename already starts with a valid YYYYMMDD prefix and description."""
+    stem = os.path.splitext(os.path.basename(filename))[0].strip()
+    if not _CANONICAL_NAME_RE.match(stem):
+        return False
+    if _DUP_SUFFIX_RE.search(stem):
+        return False
+    try:
+        datetime.datetime.strptime(stem[:8], "%Y%m%d")
+    except ValueError:
+        return False
+    rest = stem[8:].strip()
+    return len(rest) >= 2 and rest.lower() not in {"unknown", "unknown unknown"}
+
+
+def extract_source_timestamp(path: str) -> tuple[datetime.datetime | None, str | None]:
+    """Extract a timestamp or fallback date already present in filenames.
+
+    Returns a datetime plus a normalized filename token that preserves time-of-day
+    for screenshots (e.g. ``20240102_142144``), or ``(datetime, None)`` when only
+    a calendar date is embedded in the filename.
     """
     name = os.path.basename(path)
     stem = os.path.splitext(name)[0]
@@ -127,6 +152,22 @@ def extract_source_timestamp(path: str) -> tuple[datetime.datetime | None, str |
         compact_date = date.replace("-", "")
         duplicate_suffix = f"_{duplicate}" if duplicate else ""
         return dt, f"{compact_date}_{hour_int:02d}{minute}{second}{duplicate_suffix}"
+
+    for idx, pattern in enumerate(_FILENAME_DATE_PATTERNS):
+        match = pattern.search(stem)
+        if not match:
+            continue
+        if idx in (0, 1):
+            year_s, month_s, day_s = match.groups()
+        else:
+            month_s, day_s, year_s = match.groups()
+        year, month, day = int(year_s), int(month_s), int(day_s)
+        if not (1990 <= year <= 2039):
+            continue
+        try:
+            return datetime.datetime(year, month, day), None
+        except ValueError:
+            continue
 
     return None, None
 
@@ -203,6 +244,16 @@ def rename_invoice(
     if not omit_unknown_components and not is_valid_filename(document_type):
         document_type = UNKNOWN_VALUE
 
+    if company_name and document_type:
+        comp_cf = company_name.casefold()
+        doc_cf = document_type.casefold()
+        if doc_cf == comp_cf:
+            document_type = ""
+        elif doc_cf.startswith(comp_cf + " ") or doc_cf.startswith(comp_cf + "-"):
+            stripped = document_type[len(company_name):].lstrip(" -_:")
+            if stripped:
+                document_type = stripped
+
     if is_image and preserve_source_timestamp_for_images and source_token:
         date_part = source_token
     elif document_date:
@@ -218,15 +269,15 @@ def rename_invoice(
     if document_type:
         name_parts.append(document_type)
 
-    if (
-        is_image
-        and source_token
-        and skip_when_no_substantial_description
-        and not company_name
-        and not document_type
-    ):
-        logging.info(f'File "{os.path.basename(pdf_path)}" has no substantial rename metadata.')
-        return None
+    if skip_when_no_substantial_description and not company_name and not document_type:
+        if not source_token:
+            logging.info(
+                f'Skipping rename with no extracted metadata and no source token: "{os.path.basename(pdf_path)}"'
+            )
+            return None
+        if is_image:
+            logging.info(f'File "{os.path.basename(pdf_path)}" has no substantial rename metadata.')
+            return None
 
     base_name = " ".join(name_parts).strip()
 

@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from _document_processing import (
     extract_source_timestamp,
     harmonize_company_name,
+    is_already_canonically_named,
     parse_document_date,
     rename_invoice,
     undo_renames,
@@ -93,6 +94,45 @@ class TestSourceTimestampExtraction:
         )
         assert dt == datetime.datetime(2024, 1, 2, 14, 21, 44)
         assert token == "20240102_142144"
+
+    @pytest.mark.parametrize(
+        ("filename", "expected"),
+        [
+            ("2024-01-31 - ACME Benefits Summary.pdf", datetime.datetime(2024, 1, 31)),
+            ("2026.05.11 - Notice of Appearance.pdf", datetime.datetime(2026, 5, 11)),
+            ("doc_20251007_122903.png", datetime.datetime(2025, 10, 7)),
+            ("3261_20260116134033847_banner.jpg", datetime.datetime(2026, 1, 16)),
+            ("student_0602501_8_24_2026.pdf", datetime.datetime(2026, 8, 24)),
+            ("conf_02272026-4943897.pdf", datetime.datetime(2026, 2, 27)),
+        ],
+    )
+    def test_extracts_filename_date_fallback(self, filename, expected):
+        dt, token = extract_source_timestamp(filename)
+        assert dt == expected
+        assert token is None
+
+    def test_ignores_unix_epoch_milliseconds_filename(self):
+        dt, token = extract_source_timestamp("1770950970595.jpeg")
+        assert dt is None
+        assert token is None
+
+
+class TestIsAlreadyCanonicallyNamed:
+    @pytest.mark.parametrize(
+        ("filename", "expected"),
+        [
+            ("20240315 ACME Invoice.pdf", True),
+            ("20260630 Northside Sports Order Confirmation.png", True),
+            ("20240315 ACME Invoice (1).pdf", False),
+            ("20240315 ACME Invoice 2.pdf", False),
+            ("00000000 ACME Invoice.pdf", False),
+            ("2024-03-15 ACME Invoice.pdf", False),
+            ("20240315 Unknown.pdf", False),
+            ("original.pdf", False),
+        ],
+    )
+    def test_canonical_name_detection(self, filename, expected):
+        assert is_already_canonically_named(filename) is expected
 
 
 class TestRenameInvoice:
@@ -243,6 +283,39 @@ class TestRenameInvoice:
         result = rename_invoice(image_path, "", None, "General Screenshot", sample_config)
         assert result is None
         assert os.path.exists(image_path)
+
+    def test_skips_empty_metadata_without_source_token(self, tmp_path, sample_config):
+        image_path = str(tmp_path / "1770950970595.jpeg")
+        with open(image_path, 'w') as f:
+            f.write("fake image")
+
+        result = rename_invoice(image_path, "Unknown", None, "", sample_config)
+        assert result is None
+        assert os.path.exists(image_path)
+
+    def test_deduplicates_leading_company_prefix_in_doc_type(self, tmp_path, sample_config):
+        pdf_path = str(tmp_path / "original.pdf")
+        with open(pdf_path, 'w') as f:
+            f.write("fake pdf")
+
+        result = rename_invoice(
+            pdf_path,
+            "ACME",
+            datetime.date(2024, 3, 15),
+            "ACME Order Confirmation",
+            sample_config,
+        )
+        assert result is not None
+        assert os.path.basename(result) == "20240315 ACME Order Confirmation.pdf"
+
+    def test_uses_filename_date_fallback_when_document_date_missing(self, tmp_path, sample_config):
+        pdf_path = str(tmp_path / "2024-01-31 - ACME Benefits Summary.pdf")
+        with open(pdf_path, 'w') as f:
+            f.write("fake pdf")
+
+        result = rename_invoice(pdf_path, "ACME", None, "Benefits Summary", sample_config)
+        assert result is not None
+        assert os.path.basename(result) == "20240131 ACME Benefits Summary.pdf"
 
     def test_undo_log_written(self, tmp_path, sample_config):
         pdf_path = str(tmp_path / "original.pdf")

@@ -440,7 +440,10 @@ def organize_files(
             working, doc_type, error = pdf_renamer(original, apply)
             if working.name != original.name:
                 renamed_to = working.name
-        category = classify_pdf(doc_type) if original.suffix.lower() == ".pdf" else classify_extension(original)
+        inferred_doc_type = doc_type
+        if not inferred_doc_type and re.match(r"^(?:19|20)\d{6}\s+\S+", working.stem):
+            inferred_doc_type = working.stem[8:].strip()
+        category = classify_pdf(inferred_doc_type) if original.suffix.lower() == ".pdf" else classify_extension(original)
         if error:
             category = "Review"
 

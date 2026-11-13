@@ -24,6 +24,7 @@ from _ai_processing import extract_metadata
 from _pdf_utils import IMAGE_EXTENSIONS, extract_content
 from _document_processing import (
     harmonize_company_name,
+    is_already_canonically_named,
     parse_document_date,
     rename_invoice,
     undo_renames,
@@ -290,7 +291,7 @@ def _is_supported_document(filename: str) -> bool:
     return os.path.splitext(filename)[1].lower() in SUPPORTED_EXTENSIONS
 
 
-def collect_pdf_files(input_paths: list, recursive: bool = False) -> list:
+def collect_pdf_files(input_paths: list, recursive: bool = False, skip_already_named: bool = False) -> list:
     """Collect all supported PDF and image files from input paths."""
     pdf_files = []
     for input_path in input_paths:
@@ -299,7 +300,10 @@ def collect_pdf_files(input_paths: list, recursive: bool = False) -> list:
         input_path = normalize_unicode(input_path.strip('"').rstrip('\\').rstrip('/'))
         if os.path.isfile(input_path):
             if _is_supported_document(input_path):
-                pdf_files.append(input_path)
+                if skip_already_named and is_already_canonically_named(os.path.basename(input_path)):
+                    logging.info(f"Skipping already canonically named file: {input_path}")
+                else:
+                    pdf_files.append(input_path)
             else:
                 logging.warning(f"Not a supported PDF/image file: {input_path}")
         elif os.path.isdir(input_path):
@@ -307,12 +311,18 @@ def collect_pdf_files(input_paths: list, recursive: bool = False) -> list:
                 for root, _, files in os.walk(input_path):
                     for f in files:
                         if _is_supported_document(f):
-                            pdf_files.append(os.path.join(root, f))
+                            if skip_already_named and is_already_canonically_named(f):
+                                logging.info(f"Skipping already canonically named file: {os.path.join(root, f)}")
+                            else:
+                                pdf_files.append(os.path.join(root, f))
             else:
                 for f in os.listdir(input_path):
                     fp = os.path.join(input_path, f)
                     if os.path.isfile(fp) and _is_supported_document(f):
-                        pdf_files.append(fp)
+                        if skip_already_named and is_already_canonically_named(f):
+                            logging.info(f"Skipping already canonically named file: {fp}")
+                        else:
+                            pdf_files.append(fp)
         else:
             logging.error(f"Not a valid file or folder: {input_path}")
     return pdf_files
@@ -570,6 +580,10 @@ def build_parser() -> argparse.ArgumentParser:
     rename_parser.add_argument(
         "--ocr", action="store_true",
         help="Enable PaddleOCR (requires installation via setup.ps1)"
+    )
+    rename_parser.add_argument(
+        "--skip-already-named", action="store_true",
+        help="Skip files that already start with a canonical YYYYMMDD prefix"
     )
 
     organize_parser = subparsers.add_parser(
@@ -939,7 +953,8 @@ def _handle_rename(args: argparse.Namespace, output_format: str) -> None:
         )
 
     recursive = getattr(args, "recursive", False)
-    pdf_files = collect_pdf_files(paths, recursive=recursive)
+    skip_already_named = getattr(args, "skip_already_named", False)
+    pdf_files = collect_pdf_files(paths, recursive=recursive, skip_already_named=skip_already_named)
     if not pdf_files:
         error_exit(
             "no_files",
@@ -1139,6 +1154,8 @@ def _handle_organize(args: argparse.Namespace, output_format: str) -> None:
         yaml_path = os.path.join(str(base_dir), "harmonized-company-names.yaml")
         if config:
             def pdf_renamer(path: Path, apply: bool):
+                if is_already_canonically_named(path.name):
+                    return path, path.stem[9:].strip(), None
                 result = process_pdf(str(path), config, yaml_path, None, dry_run=not apply)
                 if result.status == "failed":
                     return path, None, result.error
