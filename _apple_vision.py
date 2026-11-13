@@ -103,7 +103,7 @@ def analyze_image_with_apple_vision(image_path: str, config: dict) -> AppleVisio
 
     image_cfg = config.get("image", {})
     url = Foundation.NSURL.fileURLWithPath_(os.fspath(image_path))
-    handler = Vision.VNImageRequestHandler.alloc().initWithURL_options_(url, {})
+    handler = Vision.VNImageRequestHandler.alloc().initWithURL_options_(url, None)
 
     requests = []
     text_request = Vision.VNRecognizeTextRequest.alloc().init()
