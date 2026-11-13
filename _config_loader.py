@@ -7,9 +7,11 @@ from __future__ import annotations
 import os
 import re
 import sys
+import datetime as dt
 import logging
 import shlex
 import subprocess
+from pathlib import Path
 from typing import Any
 
 import yaml
@@ -18,10 +20,36 @@ import yaml
 _ENV_VAR_PATTERN = re.compile(r"\$\{([^}]+)\}")
 
 
+def _read_key_from_bwa_cache(name: str) -> str | None:
+    """Read a credential from bwa's daily environment cache file if valid."""
+    if "pytest" in sys.modules and not os.environ.get("TEST_BWA_CACHE"):
+        return None
+    cache_path = Path(os.environ.get("BW_ENV_CACHE_FILE", "~/.cache/bwa/env.zsh")).expanduser()
+    if not cache_path.is_file():
+        return None
+    try:
+        content = cache_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    today = dt.date.today().isoformat()
+    date_match = re.search(r"export\s+BWA_ENV_CACHE_DATE=['\"]?([0-9-]+)['\"]?", content)
+    if not date_match or date_match.group(1) != today:
+        return None
+    key_match = re.search(rf"export\s+{re.escape(name)}=['\"]([^'\"]+)['\"]", content)
+    if key_match:
+        val = key_match.group(1).strip()
+        if val and not any(c.isspace() for c in val):
+            return val
+    return None
+
+
 def _openai_key_from_bwa(name: str = "OPENAI_API_KEY") -> str:
     """Read one credential without evaluating shell output or logging secrets."""
     if not isinstance(name, str) or not re.fullmatch(r"[A-Z_][A-Z0-9_]*", name):
         raise ValueError("ai.bwa_key must be a valid environment variable name.")
+    cached = _read_key_from_bwa_cache(name)
+    if cached is not None:
+        return cached
     try:
         result = subprocess.run(
             ["bwa", "env", name],

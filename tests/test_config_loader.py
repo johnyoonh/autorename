@@ -496,3 +496,33 @@ def test_bwa_rejects_invalid_credential_names_without_running(tmp_path, monkeypa
         pytest.fail('invalid name must not invoke bwa')
     monkeypatch.setattr(subprocess, 'run', run)
     assert load_yaml_config(str(path)) is None
+
+
+def test_bwa_cache_fast_path(tmp_path, monkeypatch):
+    import datetime as dt
+    import subprocess
+
+    cache_file = tmp_path / 'env.zsh'
+    today = dt.date.today().isoformat()
+    cache_file.write_text(
+        f"export BWA_ENV_CACHE_DATE='{today}'\n"
+        "export OPENAI_AUTORENAME_API_KEY='cached-fast-key'\n"
+    )
+    monkeypatch.setenv("TEST_BWA_CACHE", "1")
+    monkeypatch.setenv("BW_ENV_CACHE_FILE", str(cache_file))
+
+    path = tmp_path / 'config.yaml'
+    path.write_text(
+        'config_version: 2\n'
+        'ai:\n'
+        '  provider: openai\n'
+        '  api_key_source: bwa\n'
+        '  bwa_key: OPENAI_AUTORENAME_API_KEY\n'
+    )
+    def run(*args, **kwargs):
+        pytest.fail("subprocess.run must not be called when bwa cache is valid")
+    monkeypatch.setattr(subprocess, 'run', run)
+
+    config = load_yaml_config(str(path))
+    assert config['ai']['api_key'] == 'cached-fast-key'
+
