@@ -4,6 +4,8 @@
 
 set -u
 
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_BIN="${AUTORENAME_PYTHON:-$SCRIPT_DIR/.venv/bin/python}"
 PYTHON_SCRIPT="${AUTORENAME_SCRIPT:-$SCRIPT_DIR/autorename-pdf.py}"

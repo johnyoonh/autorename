@@ -26,6 +26,7 @@ def test_installer_previews_then_installs_finder_services(tmp_path):
     assert result.returncode == 0, result.stderr
     for name, is_preview in [('Preview AutoRename', True), ('Rename with AutoRename', False)]:
         contents = services / (name + '.workflow') / 'Contents'
+        assert (contents.parent.stat().st_mode & 0o777) == 0o755
         info = plistlib.loads((contents / 'Info.plist').read_bytes())
         service = info['NSServices'][0]
         assert service['NSRequiredContext']['NSApplicationIdentifier'] == 'com.apple.finder'
@@ -50,7 +51,9 @@ def test_installer_previews_then_installs_finder_services(tmp_path):
 
     result = subprocess.run(command + ['--apply', '--replace'], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
-    assert len(list(services.glob('*.workflow.backup-*'))) == 2
+    assert list(services.glob('*.workflow.backup-*')) == []
+    backup_dir = services.parent / (services.name + ' Backups')
+    assert len(list(backup_dir.glob('*.workflow.backup-*'))) == 2
 
 
 def test_installer_refuses_incomplete_runtime_without_writing(tmp_path):

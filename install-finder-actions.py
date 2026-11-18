@@ -6,6 +6,8 @@ from pathlib import Path
 import plistlib
 import shlex
 import shutil
+import subprocess
+import sys
 import tempfile
 import uuid
 
@@ -68,11 +70,13 @@ def main():
         if target.exists() and not args.replace:
             parser.error(f'Action already exists: {target}; use --replace to back it up')
     services.mkdir(parents=True, exist_ok=True)
+    backup_dir = services.parent / (services.name + ' Backups')
     for name, command in actions:
         target = services / (name + '.workflow')
         stage = Path(tempfile.mkdtemp(prefix='.autorename-', dir=services))
         backup = None
         try:
+            stage.chmod(0o755)
             contents = stage / 'Contents'
             contents.mkdir()
             info = {'NSServices': [{
@@ -84,7 +88,8 @@ def main():
             for filename, data in [('Info.plist', info), ('document.wflow', workflow(name, command))]:
                 (contents / filename).write_bytes(plistlib.dumps(data))
             if target.exists():
-                backup = services / (name + '.workflow.backup-' + uuid.uuid4().hex)
+                backup_dir.mkdir(parents=True, exist_ok=True)
+                backup = backup_dir / (name + '.workflow.backup-' + uuid.uuid4().hex)
                 target.rename(backup)
                 print(f'Backup: {backup}')
             try:
@@ -96,6 +101,12 @@ def main():
         finally:
             if stage.exists():
                 shutil.rmtree(stage)
+    pbs = Path('/System/Library/CoreServices/pbs')
+    if sys.platform == 'darwin' and services == (Path.home() / 'Library/Services').resolve() and os.access(pbs, os.X_OK):
+        try:
+            subprocess.run([str(pbs), '-update'], check=False, capture_output=True, timeout=15)
+        except (OSError, subprocess.SubprocessError):
+            pass
     print('Installed. Select PDFs or images in Finder > Quick Actions (or Services).')
 
 
